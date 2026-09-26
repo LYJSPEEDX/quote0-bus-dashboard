@@ -95,7 +95,7 @@ class Settings:
             quote0_api_key=required("QUOTE0_API_KEY"),
             quote0_device_id=required("QUOTE0_DEVICE_ID"),
             quote0_task_key=_optional(env.get("QUOTE0_TASK_KEY")),
-            stop_id=env.get("STOP_ID", "212711").strip(),
+            stop_id=env.get("STOP_ID", "212726").strip(),
             route_number=env.get("ROUTE_NUMBER", "526").strip(),
             destination_filter=_optional(env.get("DESTINATION_FILTER")),
             max_departures=max_departures,

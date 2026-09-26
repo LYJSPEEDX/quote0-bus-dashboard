@@ -35,7 +35,7 @@ variable "quote0_task_key" {
 
 variable "stop_id" {
   type    = string
-  default = "212711"
+  default = "212726"
 }
 
 variable "route_number" {

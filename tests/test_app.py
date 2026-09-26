@@ -67,7 +67,7 @@ class AppTests(unittest.TestCase):
         result = app.fetch_departures(self.settings, self.now, opener)
         self.assertEqual([item.minutes for item in result], [6, 12, 20])
         parsed = parse_qs(urlparse(captured["request"].full_url).query)
-        self.assertEqual(parsed["name_dm"], ["212711"])
+        self.assertEqual(parsed["name_dm"], ["212726"])
         self.assertEqual(captured["request"].get_header("Authorization"), "apikey tfnsw-secret")
 
     def test_destination_filter_and_png_output(self):

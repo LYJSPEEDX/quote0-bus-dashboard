@@ -1,7 +1,7 @@
 # Sydney 526 Quote/0 board
 
 Serverless Python service that fetches TfNSW departures for Australia Ave opp
-Figtree Dr (`212711`) and sends the next 526 bus arrivals to a MindReset
+Figtree Dr (`212726`) and sends the next 526 bus arrivals to a MindReset
 Quote/0 e-ink display.
 
 ## Prerequisites
@@ -37,7 +37,7 @@ do not share it, and never commit it.
 
 ## Configuration
 
-Defaults are in `terraform/variables.tf`: stop `212711`, route `526`, 10:00 to
+Defaults are in `terraform/variables.tf`: stop `212726`, route `526`, 10:00 to
 19:00 Sydney time, normal refresh every 10 minutes, and peak refresh every two
 minutes between 16:30 and 18:30. `NORMAL_REFRESH_MINUTES` and
 `PEAK_REFRESH_MINUTES` must be multiples of two because the scheduler ticks
