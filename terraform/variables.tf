@@ -63,10 +63,10 @@ variable "locations" {
 
 variable "max_departures" {
   type    = number
-  default = 8
+  default = 3
   validation {
-    condition     = var.max_departures >= 1 && var.max_departures <= 8
-    error_message = "max_departures must be between 1 and 8."
+    condition     = var.max_departures >= 1 && var.max_departures <= 3
+    error_message = "max_departures must be between 1 and 3."
   }
 }
 

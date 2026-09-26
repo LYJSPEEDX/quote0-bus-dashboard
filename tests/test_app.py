@@ -116,15 +116,20 @@ class AppTests(unittest.TestCase):
         self.assertIsInstance(app._font(12, bold=True), app.ImageFont.FreeTypeFont)
         self.assertTrue((app.FONT_DIR / "DejaVuSans-Bold.ttf").is_file())
 
-    def test_rows_show_up_to_eight_clock_times_within_the_screen(self):
+    def test_rows_stay_within_the_screen(self):
         location = self.settings.locations[0]
-        departures = [app.Departure(self.now, minutes) for minutes in range(0, 100, 10)]
+        departures = [app.Departure(self.now, minutes) for minutes in (118, 128, 138)]
         png = app.render_board(location, [(stop, departures) for stop in location.stops], self.now, self.settings)
         image = app.Image.open(app.BytesIO(png))
         pixels = image.load()
         ink_rows = [y for y in range(image.height) if any(pixels[x, y] == 0 for x in range(image.width))]
         self.assertLess(max(ink_rows), image.height - 2)
-        self.assertEqual(self.settings.max_departures, 8)
+
+    def test_long_eta_fits_on_screen(self):
+        image = app.Image.new("1", app.SCREEN_SIZE, 1)
+        draw = app.ImageDraw.Draw(image)
+        for text in ("12", "105"):
+            self.assertLessEqual(app._text_width(draw, text, app._fit_font(draw, text, 46, 118)), 118)
 
     def test_push_uses_v2_endpoint_task_key_and_no_dither(self):
         captured = {}

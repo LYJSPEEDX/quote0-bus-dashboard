@@ -48,9 +48,9 @@ Defaults are in `terraform/variables.tf`: the Olympic Park 526 location, 10:00 t
 every two minutes.
 
 Quote/0 only displays a push when it next wakes (its own refresh interval, set in
-Dot App), so an image can appear well after it was rendered. The board therefore
-shows up to eight departure clock times per direction rather than countdowns,
-and labels the render time as "Updated HH:MM".
+Dot App), so an image can appear well after it was rendered. Minutes count from
+the "Updated HH:MM" time in the header, and each row also shows the next bus's
+clock time, which stays correct however late the image appears.
 
 ### Locations
 
