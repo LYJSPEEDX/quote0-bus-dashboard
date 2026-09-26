@@ -367,6 +367,9 @@ def _draw_icon(draw: ImageDraw.ImageDraw, rows: Sequence[str], left: int, top: i
                 draw.point((left + x, top + y), fill=1)
 
 
+RIGHT_COLUMN_X = 214
+
+
 def _draw_row(
     draw: ImageDraw.ImageDraw,
     stop: Stop,
@@ -374,39 +377,39 @@ def _draw_row(
     top: int,
     settings: Settings,
 ) -> None:
-    """Direction label and the next ETA on the left; following ETAs on the right."""
-    width = SCREEN_SIZE[0]
-    label_font = _font(13, bold=True)
-    unit_font = _font(14, bold=True)
-    draw.text((6, top + 3), f"→ {stop.label}".upper(), font=label_font, fill=0)
+    """Next bus as a big countdown with its clock time; later buses as clock times.
+
+    Text is placed on baselines ("ls" anchor) so the columns line up regardless
+    of glyph heights.
+    """
+    draw.text((6, top + 15), f"→ {stop.label}".upper(), font=_font(13, bold=True), fill=0, anchor="ls")
 
     if not departures:
-        draw.text((6, top + 26), "No buses", font=_font(22, bold=True), fill=0)
+        draw.text((6, top + 50), "No buses", font=_font(22, bold=True), fill=0, anchor="ls")
         return
 
-    first = departures[0]
+    first, later = departures[0], departures[1:3]
+    baseline = top + 58
     hero = "Now" if first.minutes == 0 else str(first.minutes)
     hero_font = _fit_font(draw, hero, 46, 118)
-    hero_top = top + 15
-    draw.text((4, hero_top), hero, font=hero_font, fill=0)
+    draw.text((5, baseline), hero, font=hero_font, fill=0, anchor="ls")
+    unit_x = 5 + _text_width(draw, hero, hero_font) + 6
+    # The clock time sits above "min"; with no unit ("Now") it drops to the baseline.
+    clock_baseline = baseline - 19 if first.minutes else baseline
+    draw.text((unit_x, clock_baseline), _clock(first, settings), font=_font(14, bold=False), fill=0, anchor="ls")
     if first.minutes:
-        hero_right = 4 + _text_width(draw, hero, hero_font)
-        draw.text((hero_right + 3, hero_top + 30), "min", font=unit_font, fill=0)
+        draw.text((unit_x, baseline), "min", font=_font(14, bold=True), fill=0, anchor="ls")
 
-    # Right column: departure clock time of the next bus, then later ETAs.
-    right = width - 6
-    clock_font = _font(13, bold=False)
-    clock = f"at {first.due_at.astimezone(settings.tz).strftime('%H:%M')}"
-    draw.text((right - _text_width(draw, clock, clock_font), top + 4), clock, font=clock_font, fill=0)
-    later = [str(item.minutes) for item in departures[1:]]
     if later:
-        later_text = "  ".join(later)
-        later_font = _fit_font(draw, later_text, 26, 120)
-        later_width = _text_width(draw, later_text, later_font)
-        draw.text((right - later_width, top + 22), later_text, font=later_font, fill=0)
-        caption = "then (min)"
-        caption_font = _font(10, bold=False)
-        draw.text((right - _text_width(draw, caption, caption_font), top + 50), caption, font=caption_font, fill=0)
+        draw.line((RIGHT_COLUMN_X - 12, top + 6, RIGHT_COLUMN_X - 12, top + 60), fill=0, width=1)
+        draw.text((RIGHT_COLUMN_X, top + 15), "THEN", font=_font(10, bold=True), fill=0, anchor="ls")
+        time_font = _font(20, bold=True)
+        for index, departure in enumerate(later):
+            draw.text((RIGHT_COLUMN_X, top + 36 + index * 22), _clock(departure, settings), font=time_font, fill=0, anchor="ls")
+
+
+def _clock(departure: Departure, settings: Settings) -> str:
+    return departure.due_at.astimezone(settings.tz).strftime("%H:%M")
 
 
 def _text_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> int:
