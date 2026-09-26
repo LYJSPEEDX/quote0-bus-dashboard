@@ -31,17 +31,19 @@ wakes, not necessarily immediately.
 cp terraform/terraform.tfvars.example terraform/secrets.auto.tfvars
 # Edit secrets.auto.tfvars locally. It is ignored by Git.
 chmod 600 terraform/secrets.auto.tfvars
+# State lives in S3; create the bucket once (docs/HANDBOOK.md section 5.3), then:
+cp terraform/backend.hcl.example terraform/backend.hcl   # fill in the bucket name
 
 ./scripts/package_lambda.sh
 cd terraform
-terraform init
+terraform init -backend-config=backend.hcl
 terraform plan -out=tfplan
 terraform apply tfplan
 ```
 
-Terraform uses local state by design. `terraform.tfstate` includes Lambda
-environment variables, including both API keys. Keep it on an encrypted disk,
-do not share it, and never commit it.
+Terraform state is stored in a private, versioned, encrypted S3 bucket with
+S3-native locking. The state includes Lambda environment variables, including
+both API keys, so never make the bucket public or copy the state elsewhere.
 
 ## Configuration
 

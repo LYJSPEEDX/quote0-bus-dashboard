@@ -1,0 +1,7 @@
+# Copy to backend.hcl (git-ignored) and use: terraform init -backend-config=backend.hcl
+# Create the bucket first; see docs/HANDBOOK.md section 5.3.
+bucket       = "quote0-busboard-tfstate-<aws-account-id>"
+key          = "quote0-busboard/terraform.tfstate"
+region       = "ap-southeast-2"
+encrypt      = true
+use_lockfile = true

@@ -157,7 +157,8 @@ Terraform 把“AWS 里应该有什么”写成代码（`terraform/*.tf`），�
 
 | 文件 | 内容 |
 |---|---|
-| `versions.tf` | Terraform 和 AWS provider 的版本要求 |
+| `versions.tf` | Terraform 和 AWS provider 的版本要求、S3 state backend 声明 |
+| `backend.hcl.example` | S3 state 配置模板；复制成 `backend.hcl`（git 忽略）后使用 |
 | `variables.tf` | 所有可配置项及默认值、校验规则 |
 | `main.tf` | 资源定义：Lambda、IAM 角色、日志组、定时器 |
 | `outputs.tf` | apply 后打印的信息（函数名、账户 ID 等） |
@@ -168,7 +169,7 @@ Terraform 把“AWS 里应该有什么”写成代码（`terraform/*.tf`），�
 
 | 命令 | 做什么 | 会不会改 AWS |
 |---|---|---|
-| `terraform init` | 下载 AWS provider 到 `.terraform/` | 不会 |
+| `terraform init -backend-config=backend.hcl` | 连接 S3 state、下载 AWS provider 到 `.terraform/` | 不会 |
 | `terraform fmt` | 格式化 `.tf` 文件 | 不会 |
 | `terraform validate` | 检查语法和变量校验规则 | 不会 |
 | `terraform plan -out=tfplan` | 对比代码和现实，列出要增/改/删什么，并存成计划文件 | 不会 |
@@ -181,18 +182,36 @@ Terraform 把“AWS 里应该有什么”写成代码（`terraform/*.tf`），�
 
 ### 4.1 State（状态文件）——最容易踩坑的地方
 
-Terraform 用 `terraform/terraform.tfstate` 记录“我创建过哪些资源、它们的 ID”。
+Terraform 用 state 记录“我创建过哪些资源、它们的 ID”。
 
 - **它包含 Lambda 的环境变量，也就是你的 API key 明文。** 不能提交、不能分享。
 - **丢了 state，Terraform 就不认识已创建的资源。** 再 apply 会尝试重建，因为同名资源已存在而报错。
-- 本项目默认使用本地 state。如果在临时环境（例如云端开发容器）里部署，**会话结束前必须
-  把 state 保存到安全的地方**，或者改用远端 state（S3 backend）。
 
-丢了 state 的补救：用 `terraform import` 把现有资源重新登记进 state，例如
-`terraform import aws_lambda_function.board quote0-busboard`，逐个资源导入。
-或者在控制台手动删除这 8 个资源后重新 apply。
+所以本项目把 state 放在 **S3**（远端 state），而不是某台电脑的本地文件：
 
----
+| 设置 | 值 | 为什么 |
+|---|---|---|
+| 桶名 | `quote0-busboard-tfstate-<账户ID>` | S3 桶名全球唯一，带上账户 ID 避免冲突 |
+| key | `quote0-busboard/terraform.tfstate` | 桶里的对象路径 |
+| 公开访问 | 全部禁止（Block Public Access 四项全开） | state 里有密钥 |
+| 版本控制 | 开启 | state 写坏了可以回滚到上一版 |
+| 加密 | SSE-S3（AES256） | 静态加密 |
+| 锁 | `use_lockfile = true` | 两个人同时 apply 时互斥（Terraform ≥ 1.10，S3 原生锁，不需要 DynamoDB） |
+
+**任何一台电脑**只要有 AWS 凭据和 `backend.hcl`，`terraform init -backend-config=backend.hcl`
+之后就能接着管理这套资源。
+
+`backend.hcl` 为什么不直接写进 `versions.tf`？因为 backend 块不能用变量，而桶名里含账户 ID，
+属于环境相关配置，所以用“partial configuration”：代码里只写 `backend "s3" {}`，具体值由
+`-backend-config` 文件提供。
+
+state 出问题时：
+
+- 看历史版本：`aws s3api list-object-versions --bucket <桶> --prefix quote0-busboard/`
+- 回滚：下载某个旧版本覆盖回去（先确认它和 AWS 实际资源一致）。
+- 锁没释放（apply 中途被杀）：`terraform force-unlock <LOCK_ID>`，LOCK_ID 在报错信息里。
+- state 彻底丢失：用 `terraform import` 把现有资源重新登记，例如
+  `terraform import aws_lambda_function.board quote0-busboard`，逐个资源导入。
 
 ## 5. 首次部署到 AWS
 
@@ -222,7 +241,30 @@ aws sts get-caller-identity
 - AWS CLI v2：<https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html>
 - `zip`、Python 3 + pip
 
-### 5.3 生成 Terraform 变量文件
+### 5.3 创建 state 桶（每个 AWS 账户只做一次）
+
+state 桶要在 Terraform 之前存在（鸡生蛋问题），所以用 AWS CLI 手动建：
+
+```sh
+set -a; . ./.env; set +a
+export AWS_DEFAULT_REGION=$AWS_REGION
+ACCT=$(aws sts get-caller-identity --query Account --output text)
+B=quote0-busboard-tfstate-$ACCT
+
+aws s3api create-bucket --bucket $B --region $AWS_REGION \
+  --create-bucket-configuration LocationConstraint=$AWS_REGION
+aws s3api put-public-access-block --bucket $B --public-access-block-configuration \
+  BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+aws s3api put-bucket-versioning --bucket $B --versioning-configuration Status=Enabled
+aws s3api put-bucket-encryption --bucket $B --server-side-encryption-configuration \
+  '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"},"BucketKeyEnabled":true}]}'
+
+sed "s/<aws-account-id>/$ACCT/" terraform/backend.hcl.example | grep -v '^#' > terraform/backend.hcl
+```
+
+`create-bucket` 在 `us-east-1` 以外的区域必须带 `LocationConstraint`，否则报错。
+
+### 5.4 生成 Terraform 变量文件
 
 ```sh
 set -a; . ./.env; set +a
@@ -236,7 +278,9 @@ EOF
 
 其他变量（地点、时段、刷新间隔）有默认值，要改就在这个文件里追加，写法见 `terraform.tfvars.example`。
 
-### 5.4 打包
+注意：`secrets.auto.tfvars` 只在本地，不在 S3。换电脑部署时要按这一步重新生成。
+
+### 5.5 打包
 
 ```sh
 ./scripts/package_lambda.sh      # 或 PYTHON=.venv/bin/python ./scripts/package_lambda.sh
@@ -246,11 +290,11 @@ EOF
 下载 **Linux 版** Pillow，所以在 macOS / Windows 上打出来的包也能在 Lambda 上运行，
 不需要 Docker。产物是 `build/lambda.zip`（约 9 MB），包含 `app.py`、`fonts/`、`PIL/`。
 
-### 5.5 Plan 和 Apply
+### 5.6 Plan 和 Apply
 
 ```sh
 cd terraform
-terraform init
+terraform init -backend-config=backend.hcl
 terraform plan -out=tfplan
 # 仔细看输出，首次部署应该是：Plan: 8 to add, 0 to change, 0 to destroy.
 terraform apply tfplan
@@ -287,11 +331,13 @@ aws lambda invoke \
   /tmp/out.json && cat /tmp/out.json
 ```
 
-期望结果：
+期望结果（`force_refresh`）：
 
 ```json
 {"status": "updated", "departures": {"Olympic Park": {"Strathfield": 3, "Rhodes": 3}}, "forced": true}
 ```
+
+不带 `force_refresh` 时，不在刷新点会返回 `{"status": "skipped"}`，这是正常的。
 
 看日志：
 
@@ -366,7 +412,7 @@ peak_refresh_minutes   = 2
 
 ### 7.4 轮换 API key
 
-改 `.env` → 重新生成 `secrets.auto.tfvars`（5.3 节）→ plan / apply。plan 里 Lambda 的
+改 `.env` → 重新生成 `secrets.auto.tfvars`（5.4 节）→ plan / apply。plan 里 Lambda 的
 environment 会显示 `(sensitive value)` 变更，这是正常的。
 
 ---
@@ -392,6 +438,7 @@ environment 会显示 `(sensitive value)` 变更，这是正常的。
 - Lambda：每天约 270 次调用，大部分几毫秒就返回，远低于免费额度（每月 100 万次）。
 - EventBridge Scheduler：每月免费 1400 万次调用。
 - CloudWatch Logs：每天几 KB，保留 30 天。
+- S3 state 桶：一个 20 KB 左右的文件加历史版本，可忽略。
 
 正常情况下每月费用为 0 或几美分。
 
@@ -406,3 +453,28 @@ terraform destroy
 
 会列出要删除的 8 个资源，确认后删除。然后在 Dot App 里把 Image API 内容移出轮播，
 并删除不再使用的 API key / token / AWS Access Key。
+
+state 桶不归 Terraform 管，确认不再需要后手动删除（开了版本控制，要先删掉所有版本）：
+
+```sh
+aws s3api delete-objects --bucket $B --delete "$(aws s3api list-object-versions --bucket $B \
+  --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' --output json)"
+aws s3api delete-bucket --bucket $B
+```
+
+---
+
+## 附录：当前部署记录
+
+| 项目 | 值 |
+|---|---|
+| 首次部署 | 2026-09-26 |
+| 区域 | `ap-southeast-2`（悉尼） |
+| Lambda | `quote0-busboard`，Python 3.11，x86_64 |
+| 定时器 | `quote0-busboard-refresh`，`cron(0/2 10-18 ? * * *)`，`Australia/Sydney` |
+| 刷新节奏 | 10:00–17:00，每 30 分钟（10:00、10:30 … 16:30） |
+| 日志组 | `/aws/lambda/quote0-busboard`，保留 30 天 |
+| State | `s3://quote0-busboard-tfstate-<账户ID>/quote0-busboard/terraform.tfstate` |
+| 地点 | Olympic Park，526：`212726` → Strathfield，`212727` → Rhodes |
+| 设备 | Quote/0，电池唤醒间隔 30 分钟，夜间休眠 22:00–08:00，轮播里只有 1 个 Image API 内容 |
+| 部署验证 | `force_refresh` 返回 `updated`，两方向各 3 班；普通调用返回 `skipped` |

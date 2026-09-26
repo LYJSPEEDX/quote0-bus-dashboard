@@ -12,3 +12,4 @@ __pycache__/
 .env
 board-*.png
 tfplan
+terraform/backend.hcl
