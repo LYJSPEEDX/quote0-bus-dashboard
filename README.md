@@ -7,6 +7,10 @@ location shows route 526 at Sydney Olympic Park, towards Strathfield from
 Australia Ave opp Figtree Dr (`212726`) on the top row and towards Rhodes from
 Australia Ave before Herb Elliott Ave (`212727`) on the bottom row.
 
+A step-by-step operations handbook (in Chinese) covering local debugging,
+Terraform, AWS deployment, day-to-day changes and troubleshooting is in
+[`docs/HANDBOOK.md`](docs/HANDBOOK.md).
+
 ## Prerequisites
 
 - Terraform 1.6+, Python 3 with pip, `zip`, and AWS CLI credentials with permission to
@@ -31,8 +35,8 @@ chmod 600 terraform/secrets.auto.tfvars
 ./scripts/package_lambda.sh
 cd terraform
 terraform init
-terraform plan
-terraform apply
+terraform plan -out=tfplan
+terraform apply tfplan
 ```
 
 Terraform uses local state by design. `terraform.tfstate` includes Lambda
