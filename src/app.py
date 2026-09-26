@@ -395,8 +395,8 @@ def _draw_row(
     draw.text((5, baseline), hero, font=hero_font, fill=0, anchor="ls")
     unit_x = 5 + _text_width(draw, hero, hero_font) + 6
     # The clock time sits above "min"; with no unit ("Now") it drops to the baseline.
-    clock_baseline = baseline - 19 if first.minutes else baseline
-    draw.text((unit_x, clock_baseline), _clock(first, settings), font=_font(14, bold=False), fill=0, anchor="ls")
+    clock_baseline = baseline - 21 if first.minutes else baseline
+    draw.text((unit_x, clock_baseline), _clock(first, settings), font=_font(18, bold=True), fill=0, anchor="ls")
     if first.minutes:
         draw.text((unit_x, baseline), "min", font=_font(14, bold=True), fill=0, anchor="ls")
 
