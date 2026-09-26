@@ -88,6 +88,14 @@ class AppTests(unittest.TestCase):
         self.assertEqual(image.size, (296, 152))
         self.assertEqual(image.mode, "1")
 
+    def test_long_eta_fits_on_screen(self):
+        image = app.Image.new("1", app.SCREEN_SIZE, 1)
+        draw = app.ImageDraw.Draw(image)
+        for minutes in (12, 105):
+            text = f"NEXT: {minutes} min"
+            left, _top, right, _bottom = draw.textbbox((0, 0), text, font=app._fit_font(draw, text, 42, 276))
+            self.assertLessEqual(right - left, 276)
+
     def test_push_uses_v2_endpoint_task_key_and_no_dither(self):
         settings = app.Settings.from_environment({**ENV, "QUOTE0_TASK_KEY": "bus-board"})
         captured = {}

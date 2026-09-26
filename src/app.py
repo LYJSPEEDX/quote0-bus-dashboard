@@ -254,7 +254,6 @@ def render_board(departures: Iterable[Departure], updated_at: datetime, settings
     image = Image.new("1", SCREEN_SIZE, 1)
     draw = ImageDraw.Draw(image)
     title_font = _font(15, bold=True)
-    hero_font = _font(42, bold=True)
     body_font = _font(15, bold=False)
     footer_font = _font(10, bold=False)
 
@@ -263,7 +262,7 @@ def render_board(departures: Iterable[Departure], updated_at: datetime, settings
 
     if items:
         hero = f"NEXT: {items[0].minutes} min"
-        _centered_text(draw, hero, hero_font, y=39)
+        _centered_text(draw, hero, _fit_font(draw, hero, 42, SCREEN_SIZE[0] - 20), y=39)
         following = ", ".join(f"{item.minutes} min" for item in items[1:]) or "--"
         _centered_text(draw, f"THEN: {following}", body_font, y=96)
     else:
@@ -282,6 +281,17 @@ def _font(size: int, *, bold: bool) -> ImageFont.ImageFont:
         return ImageFont.truetype(name, size)
     except OSError:
         return ImageFont.load_default(size=size)
+
+
+def _fit_font(draw: ImageDraw.ImageDraw, text: str, size: int, max_width: int) -> ImageFont.ImageFont:
+    """Shrink a bold font until the text fits, so two- and three-digit ETAs stay on screen."""
+    while size > 12:
+        font = _font(size, bold=True)
+        left, _top, right, _bottom = draw.textbbox((0, 0), text, font=font)
+        if right - left <= max_width:
+            return font
+        size -= 2
+    return _font(size, bold=True)
 
 
 def _centered_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, y: int) -> None:
