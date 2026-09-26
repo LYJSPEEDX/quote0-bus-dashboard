@@ -6,5 +6,5 @@ quote0_device_id = "replace-with-device-serial"
 # Optional: only needed when the device has multiple Image API tasks.
 quote0_task_key = ""
 
-# Optional: e.g. "Rhodes". Leave empty to display all 526 departures.
-destination_filter = ""
+# Optional: one or two STOP_ID:Label pairs, one screen row each.
+# stops = "212726:Strathfield,212727:Rhodes"

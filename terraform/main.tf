@@ -13,9 +13,8 @@ locals {
     QUOTE0_API_KEY            = var.quote0_api_key
     QUOTE0_DEVICE_ID          = var.quote0_device_id
     QUOTE0_TASK_KEY           = var.quote0_task_key
-    STOP_ID                   = var.stop_id
+    STOPS                     = var.stops
     ROUTE_NUMBER              = var.route_number
-    DESTINATION_FILTER        = var.destination_filter
     MAX_DEPARTURES            = tostring(var.max_departures)
     TIMEZONE                  = var.timezone
     ACTIVE_START              = var.active_start

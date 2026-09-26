@@ -1,8 +1,10 @@
 # Sydney 526 Quote/0 board
 
-Serverless Python service that fetches TfNSW departures for Australia Ave opp
-Figtree Dr (`212726`) and sends the next 526 bus arrivals to a MindReset
-Quote/0 e-ink display.
+Serverless Python service that fetches TfNSW departures for both directions of
+route 526 at Sydney Olympic Park and sends them to a MindReset Quote/0 e-ink
+display: towards Strathfield from Australia Ave opp Figtree Dr (`212726`) on the
+top row, towards Rhodes from Australia Ave before Herb Elliott Ave (`212727`) on
+the bottom row.
 
 ## Prerequisites
 
@@ -37,7 +39,8 @@ do not share it, and never commit it.
 
 ## Configuration
 
-Defaults are in `terraform/variables.tf`: stop `212726`, route `526`, 10:00 to
+Defaults are in `terraform/variables.tf`: stops
+`212726:Strathfield,212727:Rhodes`, route `526`, 10:00 to
 19:00 Sydney time, normal refresh every 10 minutes, and peak refresh every two
 minutes between 16:30 and 18:30. `NORMAL_REFRESH_MINUTES` and
 `PEAK_REFRESH_MINUTES` must be multiples of two because the scheduler ticks
@@ -51,6 +54,14 @@ the last valid image on the device unchanged.
 
 ```sh
 python3 -m unittest discover -s tests -v
+```
+
+For a live run, copy `.env.example` to `.env` (git-ignored, `chmod 600`) and
+fill in the keys, then:
+
+```sh
+python3 scripts/local_refresh.py          # fetch TfNSW and write board.png
+python3 scripts/local_refresh.py --push   # also push the image to Quote/0
 ```
 
 ## Operational checks
@@ -82,3 +93,6 @@ troubleshooting.
 
 No API Gateway, database, VPC, S3 bucket, or public inbound endpoint is
 created.
+
+The board uses DejaVu Sans from `src/fonts/` (Bitstream Vera license, see
+`src/fonts/LICENSE-DejaVu.txt`) because the Lambda runtime has no system fonts.

@@ -64,29 +64,33 @@ class AppTests(unittest.TestCase):
                 }
             )
 
-        result = app.fetch_departures(self.settings, self.now, opener)
+        result = app.fetch_departures(self.settings, "212726", self.now, opener)
         self.assertEqual([item.minutes for item in result], [6, 12, 20])
         parsed = parse_qs(urlparse(captured["request"].full_url).query)
         self.assertEqual(parsed["name_dm"], ["212726"])
         self.assertEqual(captured["request"].get_header("Authorization"), "apikey tfnsw-secret")
 
-    def test_destination_filter_and_png_output(self):
-        settings = app.Settings.from_environment({**ENV, "DESTINATION_FILTER": "Rhodes"})
+    def test_default_stops_cover_both_directions(self):
+        self.assertEqual(
+            self.settings.directions,
+            (app.Direction("212726", "Strathfield"), app.Direction("212727", "Rhodes")),
+        )
+        with self.assertRaises(app.ConfigurationError):
+            app.Settings.from_environment({**ENV, "STOPS": "212726"})
+        with self.assertRaises(app.ConfigurationError):
+            app.Settings.from_environment({**ENV, "STOPS": "1:A,2:B,3:C"})
 
-        def opener(_request, timeout):
-            return FakeResponse(
-                {"stopEvents": [
-                    {"transportation": {"number": "526", "destination": {"name": "Rhodes"}}, "estimatedTimeGMT": "2026-09-16T06:10:00Z"},
-                    {"transportation": {"number": "526", "destination": {"name": "Burwood"}}, "estimatedTimeGMT": "2026-09-16T06:12:00Z"},
-                ]}
-            )
-
-        result = app.fetch_departures(settings, self.now, opener)
-        self.assertEqual(len(result), 1)
-        png = app.render_board(result, self.now, settings)
+    def test_two_direction_png_output(self):
+        departures = [app.Departure(self.now, 0), app.Departure(self.now, 118)]
+        boards = [(self.settings.directions[0], departures), (self.settings.directions[1], [])]
+        png = app.render_board(boards, self.now, self.settings)
         image = app.Image.open(app.BytesIO(png))
         self.assertEqual(image.size, (296, 152))
         self.assertEqual(image.mode, "1")
+
+    def test_bundled_fonts_are_used(self):
+        self.assertIsInstance(app._font(12, bold=True), app.ImageFont.FreeTypeFont)
+        self.assertTrue((app.FONT_DIR / "DejaVuSans-Bold.ttf").is_file())
 
     def test_long_eta_fits_on_screen(self):
         image = app.Image.new("1", app.SCREEN_SIZE, 1)
@@ -118,9 +122,9 @@ class AppTests(unittest.TestCase):
             raise URLError("offline")
 
         with self.assertRaises(app.UpstreamError):
-            app.fetch_departures(self.settings, self.now, offline)
+            app.fetch_departures(self.settings, "212726", self.now, offline)
 
-        empty_png = app.render_board([], self.now, self.settings)
+        empty_png = app.render_board([(direction, []) for direction in self.settings.directions], self.now, self.settings)
         image = app.Image.open(app.BytesIO(empty_png))
         self.assertEqual(image.size, (296, 152))
 

@@ -33,19 +33,15 @@ variable "quote0_task_key" {
   default     = ""
 }
 
-variable "stop_id" {
-  type    = string
-  default = "212726"
+variable "stops" {
+  type        = string
+  description = "One or two STOP_ID:Label pairs, one screen row each."
+  default     = "212726:Strathfield,212727:Rhodes"
 }
 
 variable "route_number" {
   type    = string
   default = "526"
-}
-
-variable "destination_filter" {
-  type    = string
-  default = ""
 }
 
 variable "max_departures" {

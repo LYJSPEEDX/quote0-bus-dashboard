@@ -10,7 +10,8 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, time, timezone
 from io import BytesIO
-from typing import Any, Callable, Iterable
+from pathlib import Path
+from typing import Any, Callable, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -25,6 +26,7 @@ LOG.setLevel(logging.INFO)
 TFNSW_DEPARTURES_URL = "https://api.transport.nsw.gov.au/v1/tp/departure_mon"
 QUOTE0_IMAGE_URL = "https://dot.mindreset.tech/api/authV2/open/device/{device_id}/image"
 SCREEN_SIZE = (296, 152)
+FONT_DIR = Path(__file__).resolve().parent / "fonts"
 
 
 class ConfigurationError(ValueError):
@@ -43,14 +45,19 @@ class Departure:
 
 
 @dataclass(frozen=True)
+class Direction:
+    stop_id: str
+    label: str
+
+
+@dataclass(frozen=True)
 class Settings:
     tfnsw_api_key: str
     quote0_api_key: str
     quote0_device_id: str
     quote0_task_key: str | None
-    stop_id: str
+    directions: tuple[Direction, ...]
     route_number: str
-    destination_filter: str | None
     max_departures: int
     timezone_name: str
     active_start: time
@@ -95,9 +102,8 @@ class Settings:
             quote0_api_key=required("QUOTE0_API_KEY"),
             quote0_device_id=required("QUOTE0_DEVICE_ID"),
             quote0_task_key=_optional(env.get("QUOTE0_TASK_KEY")),
-            stop_id=env.get("STOP_ID", "212726").strip(),
+            directions=_parse_directions(env.get("STOPS", "212726:Strathfield,212727:Rhodes")),
             route_number=env.get("ROUTE_NUMBER", "526").strip(),
-            destination_filter=_optional(env.get("DESTINATION_FILTER")),
             max_departures=max_departures,
             timezone_name=timezone_name,
             active_start=_parse_time(env.get("ACTIVE_START", "10:00"), "ACTIVE_START"),
@@ -128,6 +134,21 @@ def _parse_time(value: str, name: str) -> time:
         return time.fromisoformat(value.strip())
     except ValueError as exc:
         raise ConfigurationError(f"{name} must be HH:MM") from exc
+
+
+def _parse_directions(value: str) -> tuple[Direction, ...]:
+    directions: list[Direction] = []
+    for item in (part.strip() for part in value.split(",")):
+        if not item:
+            continue
+        stop_id, _sep, label = item.partition(":")
+        if not stop_id.strip() or not label.strip():
+            raise ConfigurationError("STOPS must use STOP_ID:Label pairs")
+        directions.append(Direction(stop_id=stop_id.strip(), label=label.strip()))
+    # The 296x152 panel fits two readable rows.
+    if not 1 <= len(directions) <= 2:
+        raise ConfigurationError("STOPS must list one or two stops")
+    return tuple(directions)
 
 
 def _parse_windows(value: str) -> tuple[tuple[time, time], ...]:
@@ -165,10 +186,11 @@ def should_refresh(now: datetime, settings: Settings) -> bool:
 
 def fetch_departures(
     settings: Settings,
+    stop_id: str,
     now: datetime,
     opener: Callable[..., Any] = urlopen,
 ) -> list[Departure]:
-    """Fetch, filter, and normalize the upcoming configured route departures."""
+    """Fetch, filter, and normalize the upcoming route departures from one stop."""
     local_now = now.astimezone(settings.tz)
     query = urlencode(
         {
@@ -176,7 +198,7 @@ def fetch_departures(
             "coordOutputFormat": "EPSG:4326",
             "mode": "direct",
             "type_dm": "stop",
-            "name_dm": settings.stop_id,
+            "name_dm": stop_id,
             "depArrMacro": "dep",
             "itdDate": local_now.strftime("%Y%m%d"),
             "itdTime": local_now.strftime("%H%M"),
@@ -209,8 +231,6 @@ def fetch_departures(
         if str(transport.get("number", "")) != settings.route_number:
             continue
         destination = _destination(event, transport)
-        if settings.destination_filter and settings.destination_filter.casefold() not in destination.casefold():
-            continue
         due_at = _event_time(event)
         if due_at is None or due_at < now_utc:
             continue
@@ -247,39 +267,89 @@ def _destination(event: dict[str, Any], transport: dict[str, Any]) -> str:
     return ""
 
 
-def render_board(departures: Iterable[Departure], updated_at: datetime, settings: Settings) -> bytes:
-    """Render the complete Quote/0 image as a 1-bit landscape PNG."""
+def render_board(
+    boards: Sequence[tuple[Direction, Sequence[Departure]]],
+    updated_at: datetime,
+    settings: Settings,
+) -> bytes:
+    """Render one row per direction as a 1-bit landscape PNG for Quote/0."""
     local_updated = updated_at.astimezone(settings.tz)
-    items = list(departures)
     image = Image.new("1", SCREEN_SIZE, 1)
     draw = ImageDraw.Draw(image)
-    title_font = _font(15, bold=True)
-    body_font = _font(15, bold=False)
-    footer_font = _font(10, bold=False)
+    width, height = SCREEN_SIZE
+    footer_height = 14
+    row_height = (height - footer_height) // max(1, len(boards))
 
-    draw.text((10, 8), "526 Olympic Park", font=title_font, fill=0)
-    draw.line((10, 28, 286, 28), fill=0, width=1)
+    for index, (direction, departures) in enumerate(boards):
+        top = index * row_height
+        if index:
+            draw.line((0, top, width, top), fill=0, width=2)
+        _draw_row(draw, direction, list(departures), top, row_height, settings)
 
-    if items:
-        hero = f"NEXT: {items[0].minutes} min"
-        _centered_text(draw, hero, _fit_font(draw, hero, 42, SCREEN_SIZE[0] - 20), y=39)
-        following = ", ".join(f"{item.minutes} min" for item in items[1:]) or "--"
-        _centered_text(draw, f"THEN: {following}", body_font, y=96)
-    else:
-        _centered_text(draw, "NO 526 DEPARTURES", body_font, y=64)
-        _centered_text(draw, "Check again soon", footer_font, y=87)
-
-    footer = f"Updated {local_updated.strftime('%H:%M:%S')}"
-    draw.text((10, 137), footer, font=footer_font, fill=0)
+    footer_top = height - footer_height
+    draw.rectangle((0, footer_top, width, height), fill=0)
+    small = _font(10, bold=True)
+    draw.text((6, footer_top + 1), f"{settings.route_number} Olympic Park", font=small, fill=1)
+    stamp = f"Updated {local_updated.strftime('%H:%M')}"
+    draw.text((width - 6 - _text_width(draw, stamp, small), footer_top + 1), stamp, font=small, fill=1)
     return _png_bytes(image)
 
 
+def _draw_row(
+    draw: ImageDraw.ImageDraw,
+    direction: Direction,
+    departures: list[Departure],
+    top: int,
+    row_height: int,
+    settings: Settings,
+) -> None:
+    """Direction label and the next ETA on the left; following ETAs on the right."""
+    width = SCREEN_SIZE[0]
+    label_font = _font(13, bold=True)
+    unit_font = _font(14, bold=True)
+    draw.text((6, top + 4), f"→ {direction.label}".upper(), font=label_font, fill=0)
+
+    if not departures:
+        draw.text((6, top + 26), "No buses", font=_font(22, bold=True), fill=0)
+        return
+
+    first = departures[0]
+    hero = "Now" if first.minutes == 0 else str(first.minutes)
+    hero_font = _fit_font(draw, hero, 46, 118)
+    hero_top = top + 18
+    draw.text((4, hero_top), hero, font=hero_font, fill=0)
+    if first.minutes:
+        hero_right = 4 + _text_width(draw, hero, hero_font)
+        draw.text((hero_right + 3, hero_top + 30), "min", font=unit_font, fill=0)
+
+    # Right column: departure clock time of the next bus, then later ETAs.
+    right = width - 6
+    clock_font = _font(13, bold=False)
+    clock = f"at {first.due_at.astimezone(settings.tz).strftime('%H:%M')}"
+    draw.text((right - _text_width(draw, clock, clock_font), top + 5), clock, font=clock_font, fill=0)
+    later = [str(item.minutes) for item in departures[1:]]
+    if later:
+        later_text = "  ".join(later)
+        later_font = _fit_font(draw, later_text, 26, 120)
+        later_width = _text_width(draw, later_text, later_font)
+        draw.text((right - later_width, top + 26), later_text, font=later_font, fill=0)
+        caption = "then (min)"
+        caption_font = _font(10, bold=False)
+        draw.text((right - _text_width(draw, caption, caption_font), top + 56), caption, font=caption_font, fill=0)
+
+
+def _text_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> int:
+    left, _top, right, _bottom = draw.textbbox((0, 0), text, font=font)
+    return right - left
+
+
 def _font(size: int, *, bold: bool) -> ImageFont.ImageFont:
-    """Use bundled Pillow's scalable DejaVu font where present; fall back safely."""
+    """Load the DejaVu font shipped in fonts/; Lambda has no system fonts."""
     name = "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf"
     try:
-        return ImageFont.truetype(name, size)
+        return ImageFont.truetype(str(FONT_DIR / name), size)
     except OSError:
+        LOG.warning("Bundled font %s missing; using Pillow default", name)
         return ImageFont.load_default(size=size)
 
 
@@ -292,11 +362,6 @@ def _fit_font(draw: ImageDraw.ImageDraw, text: str, size: int, max_width: int) -
             return font
         size -= 2
     return _font(size, bold=True)
-
-
-def _centered_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, y: int) -> None:
-    left, _top, right, _bottom = draw.textbbox((0, 0), text, font=font)
-    draw.text(((SCREEN_SIZE[0] - (right - left)) // 2, y), text, font=font, fill=0)
 
 
 def _png_bytes(image: Image.Image) -> bytes:
@@ -340,12 +405,13 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return {"status": "skipped"}
 
     try:
-        departures = fetch_departures(settings, now)
-        png = render_board(departures, now, settings)
+        boards = [(direction, fetch_departures(settings, direction.stop_id, now)) for direction in settings.directions]
+        png = render_board(boards, now, settings)
         push_image(settings, png)
     except UpstreamError:
         LOG.exception("Board refresh failed; retaining last successful image")
         raise
 
-    LOG.info("Board updated departures=%s forced=%s", len(departures), force_refresh)
-    return {"status": "updated", "departures": len(departures), "forced": force_refresh}
+    counts = {direction.label: len(departures) for direction, departures in boards}
+    LOG.info("Board updated departures=%s forced=%s", counts, force_refresh)
+    return {"status": "updated", "departures": counts, "forced": force_refresh}

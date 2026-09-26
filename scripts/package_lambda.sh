@@ -23,6 +23,6 @@ docker run --rm --platform linux/amd64 \
   -v "$project_dir:/var/task" \
   -w /var/task \
   "$image" \
-  /bin/sh -c 'pip install --no-cache-dir -r requirements.txt -t build/python && cp src/app.py build/python/app.py && cd build/python && zip -qr ../lambda.zip .'
+  /bin/sh -c 'pip install --no-cache-dir -r requirements.txt -t build/python && cp src/app.py build/python/app.py && cp -r src/fonts build/python/fonts && cd build/python && zip -qr ../lambda.zip .'
 
 echo "Created $build_dir/lambda.zip"
