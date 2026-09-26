@@ -63,10 +63,10 @@ variable "locations" {
 
 variable "max_departures" {
   type    = number
-  default = 3
+  default = 8
   validation {
-    condition     = var.max_departures >= 1 && var.max_departures <= 3
-    error_message = "max_departures must be between 1 and 3."
+    condition     = var.max_departures >= 1 && var.max_departures <= 8
+    error_message = "max_departures must be between 1 and 8."
   }
 }
 
@@ -82,12 +82,12 @@ variable "active_start" {
 
 variable "active_end" {
   type    = string
-  default = "19:00"
+  default = "17:00"
 }
 
 variable "normal_refresh_minutes" {
   type    = number
-  default = 10
+  default = 30
   validation {
     condition     = var.normal_refresh_minutes > 0 && var.normal_refresh_minutes % 2 == 0
     error_message = "normal_refresh_minutes must be a positive multiple of 2."
@@ -95,8 +95,9 @@ variable "normal_refresh_minutes" {
 }
 
 variable "peak_windows" {
-  type    = string
-  default = "16:30-18:30"
+  type        = string
+  description = "Optional faster-refresh windows, e.g. \"16:30-18:30\". Empty disables them."
+  default     = ""
 }
 
 variable "peak_refresh_minutes" {

@@ -43,9 +43,14 @@ class AppTests(unittest.TestCase):
         at = lambda hour, minute: datetime(2026, 9, 16, hour, minute, tzinfo=self.settings.tz)
         self.assertTrue(app.should_refresh(at(10, 0), self.settings))
         self.assertFalse(app.should_refresh(at(10, 2), self.settings))
+        self.assertTrue(app.should_refresh(at(10, 30), self.settings))
         self.assertTrue(app.should_refresh(at(16, 30), self.settings))
-        self.assertTrue(app.should_refresh(at(16, 32), self.settings))
-        self.assertFalse(app.should_refresh(at(19, 0), self.settings))
+        self.assertFalse(app.should_refresh(at(16, 32), self.settings))
+        self.assertFalse(app.should_refresh(at(17, 0), self.settings))
+
+        peak = app.Settings.from_environment({**ENV, "PEAK_WINDOWS": "16:00-16:30", "PEAK_REFRESH_MINUTES": "2"})
+        self.assertTrue(app.should_refresh(at(16, 2), peak))
+        self.assertFalse(app.should_refresh(at(15, 2), peak))
 
     def test_fetch_prefers_estimate_filters_and_sorts(self):
         captured = {}
@@ -111,13 +116,15 @@ class AppTests(unittest.TestCase):
         self.assertIsInstance(app._font(12, bold=True), app.ImageFont.FreeTypeFont)
         self.assertTrue((app.FONT_DIR / "DejaVuSans-Bold.ttf").is_file())
 
-    def test_long_eta_fits_on_screen(self):
-        image = app.Image.new("1", app.SCREEN_SIZE, 1)
-        draw = app.ImageDraw.Draw(image)
-        for minutes in (12, 105):
-            text = f"NEXT: {minutes} min"
-            left, _top, right, _bottom = draw.textbbox((0, 0), text, font=app._fit_font(draw, text, 42, 276))
-            self.assertLessEqual(right - left, 276)
+    def test_rows_show_up_to_eight_clock_times_within_the_screen(self):
+        location = self.settings.locations[0]
+        departures = [app.Departure(self.now, minutes) for minutes in range(0, 100, 10)]
+        png = app.render_board(location, [(stop, departures) for stop in location.stops], self.now, self.settings)
+        image = app.Image.open(app.BytesIO(png))
+        pixels = image.load()
+        ink_rows = [y for y in range(image.height) if any(pixels[x, y] == 0 for x in range(image.width))]
+        self.assertLess(max(ink_rows), image.height - 2)
+        self.assertEqual(self.settings.max_departures, 8)
 
     def test_push_uses_v2_endpoint_task_key_and_no_dither(self):
         captured = {}

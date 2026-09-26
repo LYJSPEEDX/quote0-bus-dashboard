@@ -42,10 +42,15 @@ do not share it, and never commit it.
 ## Configuration
 
 Defaults are in `terraform/variables.tf`: the Olympic Park 526 location, 10:00 to
-19:00 Sydney time, normal refresh every 10 minutes, and peak refresh every two
-minutes between 16:30 and 18:30. `NORMAL_REFRESH_MINUTES` and
+17:00 Sydney time, refreshing every 30 minutes. `peak_windows` (e.g.
+`"16:30-18:30"`) optionally adds faster refreshes. `NORMAL_REFRESH_MINUTES` and
 `PEAK_REFRESH_MINUTES` must be multiples of two because the scheduler ticks
 every two minutes.
+
+Quote/0 only displays a push when it next wakes (its own refresh interval, set in
+Dot App), so an image can appear well after it was rendered. The board therefore
+shows up to eight departure clock times per direction rather than countdowns,
+and labels the render time as "Updated HH:MM".
 
 ### Locations
 
@@ -103,7 +108,7 @@ aws scheduler get-schedule --name quote0-busboard-refresh --region ap-southeast-
 
 Once Terraform has applied successfully, use a manual Lambda invocation to
 fetch current TfNSW data and push a screen update immediately. This is the only
-path that bypasses the configured 10:00–19:00 refresh gate:
+path that bypasses the configured 10:00–17:00 refresh gate:
 
 ```sh
 aws lambda invoke \

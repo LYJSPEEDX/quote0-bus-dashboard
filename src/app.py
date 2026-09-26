@@ -101,11 +101,11 @@ class Settings:
                 raise ConfigurationError(f"Missing required environment variable: {name}")
             return value
 
-        max_departures = _positive_int(env.get("MAX_DEPARTURES", "3"), "MAX_DEPARTURES")
-        if max_departures > 3:
-            raise ConfigurationError("MAX_DEPARTURES must be between 1 and 3")
+        max_departures = _positive_int(env.get("MAX_DEPARTURES", "8"), "MAX_DEPARTURES")
+        if max_departures > 8:
+            raise ConfigurationError("MAX_DEPARTURES must be between 1 and 8")
 
-        normal = _positive_int(env.get("NORMAL_REFRESH_MINUTES", "10"), "NORMAL_REFRESH_MINUTES")
+        normal = _positive_int(env.get("NORMAL_REFRESH_MINUTES", "30"), "NORMAL_REFRESH_MINUTES")
         peak = _positive_int(env.get("PEAK_REFRESH_MINUTES", "2"), "PEAK_REFRESH_MINUTES")
         # The EventBridge schedule invokes every two minutes. Restrict intervals so a
         # configured refresh minute is never skipped by the scheduler.
@@ -126,9 +126,9 @@ class Settings:
             max_departures=max_departures,
             timezone_name=timezone_name,
             active_start=_parse_time(env.get("ACTIVE_START", "10:00"), "ACTIVE_START"),
-            active_end=_parse_time(env.get("ACTIVE_END", "19:00"), "ACTIVE_END"),
+            active_end=_parse_time(env.get("ACTIVE_END", "17:00"), "ACTIVE_END"),
             normal_refresh_minutes=normal,
-            peak_windows=_parse_windows(env.get("PEAK_WINDOWS", "16:30-18:30")),
+            peak_windows=_parse_windows(env.get("PEAK_WINDOWS", "")),
             peak_refresh_minutes=peak,
         )
 
@@ -345,7 +345,9 @@ def render_board(
     _draw_icon(draw, BUS_ICON, 5, 3)
     header_font = _font(12, bold=True)
     draw.text((26, 2), f"{location.route} {location.name}", font=header_font, fill=1)
-    stamp = local_updated.strftime("%H:%M")
+    # The device may show this image well after the push, so label the time
+    # explicitly rather than let it read as the current clock.
+    stamp = f"Updated {local_updated.strftime('%H:%M')}"
     draw.text((width - 6 - _text_width(draw, stamp, header_font), 2), stamp, font=header_font, fill=1)
 
     row_height = (height - HEADER_HEIGHT) // max(1, len(boards))
@@ -365,6 +367,9 @@ def _draw_icon(draw: ImageDraw.ImageDraw, rows: Sequence[str], left: int, top: i
                 draw.point((left + x, top + y), fill=1)
 
 
+TIME_COLUMNS = 4
+
+
 def _draw_row(
     draw: ImageDraw.ImageDraw,
     stop: Stop,
@@ -372,39 +377,24 @@ def _draw_row(
     top: int,
     settings: Settings,
 ) -> None:
-    """Direction label and the next ETA on the left; following ETAs on the right."""
+    """Direction label, then departure clock times in a grid.
+
+    Quote/0 only shows a push when it next wakes, so countdowns go stale; clock
+    times stay correct however late the image is displayed.
+    """
     width = SCREEN_SIZE[0]
-    label_font = _font(13, bold=True)
-    unit_font = _font(14, bold=True)
-    draw.text((6, top + 3), f"→ {stop.label}".upper(), font=label_font, fill=0)
+    draw.text((6, top + 3), f"→ {stop.label}".upper(), font=_font(13, bold=True), fill=0)
 
     if not departures:
         draw.text((6, top + 26), "No buses", font=_font(22, bold=True), fill=0)
         return
 
-    first = departures[0]
-    hero = "Now" if first.minutes == 0 else str(first.minutes)
-    hero_font = _fit_font(draw, hero, 46, 118)
-    hero_top = top + 15
-    draw.text((4, hero_top), hero, font=hero_font, fill=0)
-    if first.minutes:
-        hero_right = 4 + _text_width(draw, hero, hero_font)
-        draw.text((hero_right + 3, hero_top + 30), "min", font=unit_font, fill=0)
-
-    # Right column: departure clock time of the next bus, then later ETAs.
-    right = width - 6
-    clock_font = _font(13, bold=False)
-    clock = f"at {first.due_at.astimezone(settings.tz).strftime('%H:%M')}"
-    draw.text((right - _text_width(draw, clock, clock_font), top + 4), clock, font=clock_font, fill=0)
-    later = [str(item.minutes) for item in departures[1:]]
-    if later:
-        later_text = "  ".join(later)
-        later_font = _fit_font(draw, later_text, 26, 120)
-        later_width = _text_width(draw, later_text, later_font)
-        draw.text((right - later_width, top + 22), later_text, font=later_font, fill=0)
-        caption = "then (min)"
-        caption_font = _font(10, bold=False)
-        draw.text((right - _text_width(draw, caption, caption_font), top + 50), caption, font=caption_font, fill=0)
+    time_font = _font(20, bold=True)
+    column_width = (width - 12) // TIME_COLUMNS
+    for index, departure in enumerate(departures[: TIME_COLUMNS * 2]):
+        line, column = divmod(index, TIME_COLUMNS)
+        text = departure.due_at.astimezone(settings.tz).strftime("%H:%M")
+        draw.text((6 + column * column_width, top + 20 + line * 23), text, font=time_font, fill=0)
 
 
 def _text_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> int:
@@ -420,17 +410,6 @@ def _font(size: int, *, bold: bool) -> ImageFont.ImageFont:
     except OSError:
         LOG.warning("Bundled font %s missing; using Pillow default", name)
         return ImageFont.load_default(size=size)
-
-
-def _fit_font(draw: ImageDraw.ImageDraw, text: str, size: int, max_width: int) -> ImageFont.ImageFont:
-    """Shrink a bold font until the text fits, so two- and three-digit ETAs stay on screen."""
-    while size > 12:
-        font = _font(size, bold=True)
-        left, _top, right, _bottom = draw.textbbox((0, 0), text, font=font)
-        if right - left <= max_width:
-            return font
-        size -= 2
-    return _font(size, bold=True)
 
 
 def _png_bytes(image: Image.Image) -> bytes:
