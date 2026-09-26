@@ -27,21 +27,38 @@ variable "quote0_device_id" {
   description = "Quote/0 device serial number."
 }
 
-variable "quote0_task_key" {
-  type        = string
-  description = "Optional Image API task key."
-  default     = ""
-}
+variable "locations" {
+  description = "Screens to render. Each is one route at one or two stops (one row per direction), pushed to its own Quote/0 Image API task."
+  type = list(object({
+    name     = string
+    route    = string
+    task_key = optional(string, "")
+    stops = list(object({
+      id    = string
+      label = string
+    }))
+  }))
+  default = [{
+    name  = "Olympic Park"
+    route = "526"
+    stops = [
+      { id = "212726", label = "Strathfield" },
+      { id = "212727", label = "Rhodes" },
+    ]
+  }]
 
-variable "stops" {
-  type        = string
-  description = "One or two STOP_ID:Label pairs, one screen row each."
-  default     = "212726:Strathfield,212727:Rhodes"
-}
+  validation {
+    condition     = length(var.locations) >= 1 && alltrue([for l in var.locations : length(l.stops) >= 1 && length(l.stops) <= 2])
+    error_message = "Provide at least one location, each with one or two stops."
+  }
 
-variable "route_number" {
-  type    = string
-  default = "526"
+  validation {
+    condition = length(var.locations) == 1 || (
+      alltrue([for l in var.locations : l.task_key != ""]) &&
+      length(distinct([for l in var.locations : l.task_key])) == length(var.locations)
+    )
+    error_message = "With several locations, each needs a unique task_key."
+  }
 }
 
 variable "max_departures" {

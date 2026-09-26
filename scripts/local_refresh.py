@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Run one board refresh locally using credentials from .env.
 
-    python scripts/local_refresh.py            # fetch TfNSW, render board.png only
-    python scripts/local_refresh.py --push     # also push the image to Quote/0
+    python scripts/local_refresh.py            # fetch TfNSW, render board-*.png only
+    python scripts/local_refresh.py --push     # also push each location to Quote/0
 
 Secrets are read from the environment first, then from the git-ignored .env.
 Nothing is printed except departure counts and the push result.
@@ -35,8 +35,8 @@ def load_dotenv(path: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--push", action="store_true", help="push the rendered image to Quote/0")
-    parser.add_argument("--out", default=str(PROJECT_DIR / "board.png"), help="where to write the PNG")
+    parser.add_argument("--push", action="store_true", help="push the rendered images to Quote/0")
+    parser.add_argument("--out-dir", default=str(PROJECT_DIR), help="where to write board-<n>.png files")
     args = parser.parse_args()
 
     load_dotenv(PROJECT_DIR / ".env")
@@ -48,17 +48,21 @@ def main() -> int:
     settings = app.Settings.from_environment(env)
 
     now = datetime.now(timezone.utc)
-    boards = [(direction, app.fetch_departures(settings, direction.stop_id, now)) for direction in settings.directions]
-    for direction, departures in boards:
-        print(f"{direction.label:<12} {direction.stop_id}: {[item.minutes for item in departures]} min")
+    for index, location in enumerate(settings.locations, start=1):
+        print(f"[{location.route} {location.name}] task_key={location.task_key or '-'}")
+        boards = [
+            (stop, app.fetch_departures(settings, stop.stop_id, location.route, now)) for stop in location.stops
+        ]
+        for stop, departures in boards:
+            print(f"  -> {stop.label:<12} {stop.stop_id}: {[item.minutes for item in departures]} min")
 
-    png = app.render_board(boards, now, settings)
-    Path(args.out).write_bytes(png)
-    print(f"Wrote {args.out}")
-
-    if args.push:
-        app.push_image(settings, png)
-        print("Pushed to Quote/0")
+        png = app.render_board(location, boards, now, settings)
+        out = Path(args.out_dir) / f"board-{index}.png"
+        out.write_bytes(png)
+        print(f"  wrote {out}")
+        if args.push:
+            app.push_image(settings, png, location.task_key)
+            print("  pushed to Quote/0")
     return 0
 
 

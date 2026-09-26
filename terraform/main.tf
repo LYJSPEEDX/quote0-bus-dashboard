@@ -9,19 +9,17 @@ locals {
     ManagedBy = "Terraform"
   }
   lambda_environment = {
-    TFNSW_API_KEY             = var.tfnsw_api_key
-    QUOTE0_API_KEY            = var.quote0_api_key
-    QUOTE0_DEVICE_ID          = var.quote0_device_id
-    QUOTE0_TASK_KEY           = var.quote0_task_key
-    STOPS                     = var.stops
-    ROUTE_NUMBER              = var.route_number
-    MAX_DEPARTURES            = tostring(var.max_departures)
-    TIMEZONE                  = var.timezone
-    ACTIVE_START              = var.active_start
-    ACTIVE_END                = var.active_end
-    NORMAL_REFRESH_MINUTES    = tostring(var.normal_refresh_minutes)
-    PEAK_WINDOWS              = var.peak_windows
-    PEAK_REFRESH_MINUTES      = tostring(var.peak_refresh_minutes)
+    TFNSW_API_KEY          = var.tfnsw_api_key
+    QUOTE0_API_KEY         = var.quote0_api_key
+    QUOTE0_DEVICE_ID       = var.quote0_device_id
+    LOCATIONS              = jsonencode(var.locations)
+    MAX_DEPARTURES         = tostring(var.max_departures)
+    TIMEZONE               = var.timezone
+    ACTIVE_START           = var.active_start
+    ACTIVE_END             = var.active_end
+    NORMAL_REFRESH_MINUTES = tostring(var.normal_refresh_minutes)
+    PEAK_WINDOWS           = var.peak_windows
+    PEAK_REFRESH_MINUTES   = tostring(var.peak_refresh_minutes)
   }
 }
 
@@ -38,9 +36,9 @@ resource "aws_iam_role" "lambda" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect = "Allow"
+      Effect    = "Allow"
       Principal = { Service = "lambda.amazonaws.com" }
-      Action = "sts:AssumeRole"
+      Action    = "sts:AssumeRole"
     }]
   })
   tags = local.common_tags
@@ -52,8 +50,8 @@ resource "aws_iam_role_policy" "lambda_logs" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect = "Allow"
-      Action = ["logs:CreateLogStream", "logs:PutLogEvents"]
+      Effect   = "Allow"
+      Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
       Resource = "${aws_cloudwatch_log_group.lambda.arn}:*"
     }]
   })
@@ -84,9 +82,9 @@ resource "aws_iam_role" "scheduler" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect = "Allow"
+      Effect    = "Allow"
       Principal = { Service = "scheduler.amazonaws.com" }
-      Action = "sts:AssumeRole"
+      Action    = "sts:AssumeRole"
     }]
   })
   tags = local.common_tags

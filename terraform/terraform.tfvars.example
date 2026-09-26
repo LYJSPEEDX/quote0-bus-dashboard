@@ -1,10 +1,19 @@
 # Copy this file to secrets.auto.tfvars. Do not commit the copied file.
-tfnsw_api_key   = "replace-with-tfnsw-api-key"
-quote0_api_key  = "replace-with-dot-app-api-key"
+tfnsw_api_key    = "replace-with-tfnsw-api-key"
+quote0_api_key   = "replace-with-dot-app-api-key"
 quote0_device_id = "replace-with-device-serial"
 
-# Optional: only needed when the device has multiple Image API tasks.
-quote0_task_key = ""
-
-# Optional: one or two STOP_ID:Label pairs, one screen row each.
-# stops = "212726:Strathfield,212727:Rhodes"
+# Optional: screens to show. Each location is one route at one or two stops
+# (one row per direction). With several locations, give each its own Image API
+# task in Dot App and set a unique task_key so the device loop cycles them.
+# locations = [
+#   {
+#     name     = "Olympic Park"
+#     route    = "526"
+#     task_key = "olympic-park"
+#     stops = [
+#       { id = "212726", label = "Strathfield" },
+#       { id = "212727", label = "Rhodes" },
+#     ]
+#   },
+# ]

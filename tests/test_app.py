@@ -64,29 +64,48 @@ class AppTests(unittest.TestCase):
                 }
             )
 
-        result = app.fetch_departures(self.settings, "212726", self.now, opener)
+        result = app.fetch_departures(self.settings, "212726", "526", self.now, opener)
         self.assertEqual([item.minutes for item in result], [6, 12, 20])
         parsed = parse_qs(urlparse(captured["request"].full_url).query)
         self.assertEqual(parsed["name_dm"], ["212726"])
         self.assertEqual(captured["request"].get_header("Authorization"), "apikey tfnsw-secret")
 
-    def test_default_stops_cover_both_directions(self):
-        self.assertEqual(
-            self.settings.directions,
-            (app.Direction("212726", "Strathfield"), app.Direction("212727", "Rhodes")),
-        )
-        with self.assertRaises(app.ConfigurationError):
-            app.Settings.from_environment({**ENV, "STOPS": "212726"})
-        with self.assertRaises(app.ConfigurationError):
-            app.Settings.from_environment({**ENV, "STOPS": "1:A,2:B,3:C"})
+    def test_default_location_pairs_both_directions(self):
+        (location,) = self.settings.locations
+        self.assertEqual((location.name, location.route, location.task_key), ("Olympic Park", "526", None))
+        self.assertEqual(location.stops, (app.Stop("212726", "Strathfield"), app.Stop("212727", "Rhodes")))
 
-    def test_two_direction_png_output(self):
+    def test_locations_config_validation(self):
+        stops = [{"id": "1", "label": "North"}]
+        valid = [
+            {"name": "A", "route": "526", "task_key": "a", "stops": stops},
+            {"name": "B", "route": "533", "task_key": "b", "stops": stops},
+        ]
+        settings = app.Settings.from_environment({**ENV, "LOCATIONS": json.dumps(valid)})
+        self.assertEqual([location.task_key for location in settings.locations], ["a", "b"])
+        invalid = [
+            "not json",
+            "[]",
+            json.dumps([{"name": "A", "route": "526", "stops": stops * 3}]),
+            json.dumps([{"name": "A", "route": "526", "stops": [{"id": "1"}]}]),
+            json.dumps([{**valid[0], "task_key": ""}, valid[1]]),
+            json.dumps([valid[0], {**valid[1], "task_key": "a"}]),
+        ]
+        for value in invalid:
+            with self.subTest(value=value), self.assertRaises(app.ConfigurationError):
+                app.Settings.from_environment({**ENV, "LOCATIONS": value})
+
+    def test_png_output_for_two_and_one_stop_locations(self):
+        location = self.settings.locations[0]
         departures = [app.Departure(self.now, 0), app.Departure(self.now, 118)]
-        boards = [(self.settings.directions[0], departures), (self.settings.directions[1], [])]
-        png = app.render_board(boards, self.now, self.settings)
-        image = app.Image.open(app.BytesIO(png))
-        self.assertEqual(image.size, (296, 152))
-        self.assertEqual(image.mode, "1")
+        single = app.Location("Rhodes", "533", (app.Stop("1", "Chatswood"),), "rhodes")
+        for boards, loc in (
+            ([(location.stops[0], departures), (location.stops[1], [])], location),
+            ([(single.stops[0], departures)], single),
+        ):
+            image = app.Image.open(app.BytesIO(app.render_board(loc, boards, self.now, self.settings)))
+            self.assertEqual(image.size, (296, 152))
+            self.assertEqual(image.mode, "1")
 
     def test_bundled_fonts_are_used(self):
         self.assertIsInstance(app._font(12, bold=True), app.ImageFont.FreeTypeFont)
@@ -101,14 +120,13 @@ class AppTests(unittest.TestCase):
             self.assertLessEqual(right - left, 276)
 
     def test_push_uses_v2_endpoint_task_key_and_no_dither(self):
-        settings = app.Settings.from_environment({**ENV, "QUOTE0_TASK_KEY": "bus-board"})
         captured = {}
 
         def opener(request, timeout):
             captured["request"] = request
             return FakeResponse({"code": 200})
 
-        app.push_image(settings, b"png", opener)
+        app.push_image(self.settings, b"png", "bus-board", opener)
         request = captured["request"]
         self.assertIn("/DEVICE123/image", request.full_url)
         self.assertEqual(request.get_header("Authorization"), "Bearer quote-secret")
@@ -122,9 +140,10 @@ class AppTests(unittest.TestCase):
             raise URLError("offline")
 
         with self.assertRaises(app.UpstreamError):
-            app.fetch_departures(self.settings, "212726", self.now, offline)
+            app.fetch_departures(self.settings, "212726", "526", self.now, offline)
 
-        empty_png = app.render_board([(direction, []) for direction in self.settings.directions], self.now, self.settings)
+        location = self.settings.locations[0]
+        empty_png = app.render_board(location, [(stop, []) for stop in location.stops], self.now, self.settings)
         image = app.Image.open(app.BytesIO(empty_png))
         self.assertEqual(image.size, (296, 152))
 
@@ -147,6 +166,34 @@ class AppTests(unittest.TestCase):
             os.environ.update(previous)
         self.assertEqual(result["status"], "updated")
         self.assertTrue(result["forced"])
+        self.assertEqual(result["departures"], {"Olympic Park": {"Strathfield": 0, "Rhodes": 0}})
+
+    def test_handler_keeps_refreshing_other_locations_when_one_fails(self):
+        stops = [{"id": "1", "label": "North"}]
+        locations = [
+            {"name": "A", "route": "526", "task_key": "a", "stops": stops},
+            {"name": "B", "route": "533", "task_key": "b", "stops": stops},
+        ]
+        previous = dict(os.environ)
+        os.environ.update({**ENV, "LOCATIONS": json.dumps(locations)})
+        pushed = []
+        original_fetch, original_push = app.fetch_departures, app.push_image
+
+        def fetch(_settings, _stop_id, route, _now):
+            if route == "526":
+                raise app.UpstreamError("offline")
+            return []
+
+        try:
+            app.fetch_departures = fetch
+            app.push_image = lambda _settings, _png, task_key: pushed.append(task_key)
+            with self.assertRaises(app.UpstreamError):
+                app.lambda_handler({"force_refresh": True}, None)
+        finally:
+            app.fetch_departures, app.push_image = original_fetch, original_push
+            os.environ.clear()
+            os.environ.update(previous)
+        self.assertEqual(pushed, ["b"])
 
 
 if __name__ == "__main__":

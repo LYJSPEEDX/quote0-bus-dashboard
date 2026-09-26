@@ -45,9 +45,32 @@ class Departure:
 
 
 @dataclass(frozen=True)
-class Direction:
+class Stop:
+    """One platform of a location; its label names the direction of travel."""
+
     stop_id: str
     label: str
+
+
+@dataclass(frozen=True)
+class Location:
+    """A screen: one route at up to two facing stops, pushed to its own Quote/0 task."""
+
+    name: str
+    route: str
+    stops: tuple[Stop, ...]
+    task_key: str | None = None
+
+
+DEFAULT_LOCATIONS = json.dumps(
+    [
+        {
+            "name": "Olympic Park",
+            "route": "526",
+            "stops": [{"id": "212726", "label": "Strathfield"}, {"id": "212727", "label": "Rhodes"}],
+        }
+    ]
+)
 
 
 @dataclass(frozen=True)
@@ -55,9 +78,7 @@ class Settings:
     tfnsw_api_key: str
     quote0_api_key: str
     quote0_device_id: str
-    quote0_task_key: str | None
-    directions: tuple[Direction, ...]
-    route_number: str
+    locations: tuple[Location, ...]
     max_departures: int
     timezone_name: str
     active_start: time
@@ -101,9 +122,7 @@ class Settings:
             tfnsw_api_key=required("TFNSW_API_KEY"),
             quote0_api_key=required("QUOTE0_API_KEY"),
             quote0_device_id=required("QUOTE0_DEVICE_ID"),
-            quote0_task_key=_optional(env.get("QUOTE0_TASK_KEY")),
-            directions=_parse_directions(env.get("STOPS", "212726:Strathfield,212727:Rhodes")),
-            route_number=env.get("ROUTE_NUMBER", "526").strip(),
+            locations=_parse_locations(env.get("LOCATIONS") or DEFAULT_LOCATIONS),
             max_departures=max_departures,
             timezone_name=timezone_name,
             active_start=_parse_time(env.get("ACTIVE_START", "10:00"), "ACTIVE_START"),
@@ -136,19 +155,41 @@ def _parse_time(value: str, name: str) -> time:
         raise ConfigurationError(f"{name} must be HH:MM") from exc
 
 
-def _parse_directions(value: str) -> tuple[Direction, ...]:
-    directions: list[Direction] = []
-    for item in (part.strip() for part in value.split(",")):
-        if not item:
-            continue
-        stop_id, _sep, label = item.partition(":")
-        if not stop_id.strip() or not label.strip():
-            raise ConfigurationError("STOPS must use STOP_ID:Label pairs")
-        directions.append(Direction(stop_id=stop_id.strip(), label=label.strip()))
-    # The 296x152 panel fits two readable rows.
-    if not 1 <= len(directions) <= 2:
-        raise ConfigurationError("STOPS must list one or two stops")
-    return tuple(directions)
+def _parse_locations(value: str) -> tuple[Location, ...]:
+    """Parse LOCATIONS JSON: [{"name", "route", "task_key"?, "stops": [{"id", "label"}]}]."""
+    try:
+        raw = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ConfigurationError("LOCATIONS must be valid JSON") from exc
+    if not isinstance(raw, list) or not raw:
+        raise ConfigurationError("LOCATIONS must be a non-empty JSON list")
+
+    locations: list[Location] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ConfigurationError("Each LOCATIONS entry must be an object")
+        name, route = str(item.get("name", "")).strip(), str(item.get("route", "")).strip()
+        if not name or not route:
+            raise ConfigurationError("Each location needs a name and a route")
+        stops_raw = item.get("stops")
+        # The 296x152 panel fits two readable rows: one per direction.
+        if not isinstance(stops_raw, list) or not 1 <= len(stops_raw) <= 2:
+            raise ConfigurationError(f"Location {name} must list one or two stops")
+        stops = []
+        for stop in stops_raw:
+            stop_id = str((stop or {}).get("id", "")).strip() if isinstance(stop, dict) else ""
+            label = str(stop.get("label", "")).strip() if isinstance(stop, dict) else ""
+            if not stop_id or not label:
+                raise ConfigurationError(f"Location {name} stops need an id and a label")
+            stops.append(Stop(stop_id=stop_id, label=label))
+        locations.append(Location(name, route, tuple(stops), _optional(item.get("task_key"))))
+
+    # Without distinct task keys, every location would overwrite the same Quote/0 task.
+    if len(locations) > 1:
+        keys = [location.task_key for location in locations]
+        if None in keys or len(set(keys)) != len(keys):
+            raise ConfigurationError("With several locations, each needs a unique task_key")
+    return tuple(locations)
 
 
 def _parse_windows(value: str) -> tuple[tuple[time, time], ...]:
@@ -187,6 +228,7 @@ def should_refresh(now: datetime, settings: Settings) -> bool:
 def fetch_departures(
     settings: Settings,
     stop_id: str,
+    route: str,
     now: datetime,
     opener: Callable[..., Any] = urlopen,
 ) -> list[Departure]:
@@ -228,7 +270,7 @@ def fetch_departures(
         if not isinstance(event, dict):
             continue
         transport = event.get("transportation") or {}
-        if str(transport.get("number", "")) != settings.route_number:
+        if str(transport.get("number", "")) != route:
             continue
         destination = _destination(event, transport)
         due_at = _event_time(event)
@@ -267,47 +309,74 @@ def _destination(event: dict[str, Any], transport: dict[str, Any]) -> str:
     return ""
 
 
+# Front view of a bus, 16x13: roof, windscreen, headlights, wheels.
+BUS_ICON = (
+    "..############..",
+    ".##############.",
+    ".##..........##.",
+    ".##..........##.",
+    ".##..........##.",
+    ".##..........##.",
+    ".##############.",
+    ".##############.",
+    ".#..########..#.",
+    ".#..########..#.",
+    ".##############.",
+    "..###......###..",
+    "..###......###..",
+)
+HEADER_HEIGHT = 18
+ROW_HEIGHT = 67
+
+
 def render_board(
-    boards: Sequence[tuple[Direction, Sequence[Departure]]],
+    location: Location,
+    boards: Sequence[tuple[Stop, Sequence[Departure]]],
     updated_at: datetime,
     settings: Settings,
 ) -> bytes:
-    """Render one row per direction as a 1-bit landscape PNG for Quote/0."""
+    """Render a location as a header bar plus one row per stop, as a 1-bit PNG."""
     local_updated = updated_at.astimezone(settings.tz)
     image = Image.new("1", SCREEN_SIZE, 1)
     draw = ImageDraw.Draw(image)
     width, height = SCREEN_SIZE
-    footer_height = 14
-    row_height = (height - footer_height) // max(1, len(boards))
 
-    for index, (direction, departures) in enumerate(boards):
-        top = index * row_height
+    draw.rectangle((0, 0, width, HEADER_HEIGHT - 1), fill=0)
+    _draw_icon(draw, BUS_ICON, 5, 3)
+    header_font = _font(12, bold=True)
+    draw.text((26, 2), f"{location.route} {location.name}", font=header_font, fill=1)
+    stamp = local_updated.strftime("%H:%M")
+    draw.text((width - 6 - _text_width(draw, stamp, header_font), 2), stamp, font=header_font, fill=1)
+
+    row_height = (height - HEADER_HEIGHT) // max(1, len(boards))
+    for index, (stop, departures) in enumerate(boards):
+        top = HEADER_HEIGHT + index * row_height
         if index:
             draw.line((0, top, width, top), fill=0, width=2)
-        _draw_row(draw, direction, list(departures), top, row_height, settings)
-
-    footer_top = height - footer_height
-    draw.rectangle((0, footer_top, width, height), fill=0)
-    small = _font(10, bold=True)
-    draw.text((6, footer_top + 1), f"{settings.route_number} Olympic Park", font=small, fill=1)
-    stamp = f"Updated {local_updated.strftime('%H:%M')}"
-    draw.text((width - 6 - _text_width(draw, stamp, small), footer_top + 1), stamp, font=small, fill=1)
+        # A single-stop location gets one tall row; keep its content vertically centred.
+        _draw_row(draw, stop, list(departures), top + (row_height - ROW_HEIGHT) // 2, settings)
     return _png_bytes(image)
+
+
+def _draw_icon(draw: ImageDraw.ImageDraw, rows: Sequence[str], left: int, top: int) -> None:
+    for y, row in enumerate(rows):
+        for x, cell in enumerate(row):
+            if cell == "#":
+                draw.point((left + x, top + y), fill=1)
 
 
 def _draw_row(
     draw: ImageDraw.ImageDraw,
-    direction: Direction,
+    stop: Stop,
     departures: list[Departure],
     top: int,
-    row_height: int,
     settings: Settings,
 ) -> None:
     """Direction label and the next ETA on the left; following ETAs on the right."""
     width = SCREEN_SIZE[0]
     label_font = _font(13, bold=True)
     unit_font = _font(14, bold=True)
-    draw.text((6, top + 4), f"→ {direction.label}".upper(), font=label_font, fill=0)
+    draw.text((6, top + 3), f"→ {stop.label}".upper(), font=label_font, fill=0)
 
     if not departures:
         draw.text((6, top + 26), "No buses", font=_font(22, bold=True), fill=0)
@@ -316,7 +385,7 @@ def _draw_row(
     first = departures[0]
     hero = "Now" if first.minutes == 0 else str(first.minutes)
     hero_font = _fit_font(draw, hero, 46, 118)
-    hero_top = top + 18
+    hero_top = top + 15
     draw.text((4, hero_top), hero, font=hero_font, fill=0)
     if first.minutes:
         hero_right = 4 + _text_width(draw, hero, hero_font)
@@ -326,16 +395,16 @@ def _draw_row(
     right = width - 6
     clock_font = _font(13, bold=False)
     clock = f"at {first.due_at.astimezone(settings.tz).strftime('%H:%M')}"
-    draw.text((right - _text_width(draw, clock, clock_font), top + 5), clock, font=clock_font, fill=0)
+    draw.text((right - _text_width(draw, clock, clock_font), top + 4), clock, font=clock_font, fill=0)
     later = [str(item.minutes) for item in departures[1:]]
     if later:
         later_text = "  ".join(later)
         later_font = _fit_font(draw, later_text, 26, 120)
         later_width = _text_width(draw, later_text, later_font)
-        draw.text((right - later_width, top + 26), later_text, font=later_font, fill=0)
+        draw.text((right - later_width, top + 22), later_text, font=later_font, fill=0)
         caption = "then (min)"
         caption_font = _font(10, bold=False)
-        draw.text((right - _text_width(draw, caption, caption_font), top + 56), caption, font=caption_font, fill=0)
+        draw.text((right - _text_width(draw, caption, caption_font), top + 50), caption, font=caption_font, fill=0)
 
 
 def _text_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> int:
@@ -370,7 +439,12 @@ def _png_bytes(image: Image.Image) -> bytes:
     return buffer.getvalue()
 
 
-def push_image(settings: Settings, png: bytes, opener: Callable[..., Any] = urlopen) -> None:
+def push_image(
+    settings: Settings,
+    png: bytes,
+    task_key: str | None = None,
+    opener: Callable[..., Any] = urlopen,
+) -> None:
     """Push a complete image to Quote/0's supported v2 Image API."""
     payload: dict[str, Any] = {
         "refreshNow": True,
@@ -378,8 +452,8 @@ def push_image(settings: Settings, png: bytes, opener: Callable[..., Any] = urlo
         "border": 0,
         "ditherType": "NONE",
     }
-    if settings.quote0_task_key:
-        payload["taskKey"] = settings.quote0_task_key
+    if task_key:
+        payload["taskKey"] = task_key
     request = Request(
         QUOTE0_IMAGE_URL.format(device_id=settings.quote0_device_id),
         data=json.dumps(payload).encode("utf-8"),
@@ -404,14 +478,23 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         LOG.info("Refresh skipped outside configured cadence")
         return {"status": "skipped"}
 
-    try:
-        boards = [(direction, fetch_departures(settings, direction.stop_id, now)) for direction in settings.directions]
-        png = render_board(boards, now, settings)
-        push_image(settings, png)
-    except UpstreamError:
-        LOG.exception("Board refresh failed; retaining last successful image")
-        raise
+    results: dict[str, dict[str, int]] = {}
+    failed: list[str] = []
+    # Locations are independent Quote/0 tasks: one failing keeps its last image
+    # while the others still refresh.
+    for location in settings.locations:
+        try:
+            boards = [
+                (stop, fetch_departures(settings, stop.stop_id, location.route, now)) for stop in location.stops
+            ]
+            push_image(settings, render_board(location, boards, now, settings), location.task_key)
+        except UpstreamError:
+            LOG.exception("Refresh failed for %s; retaining its last successful image", location.name)
+            failed.append(location.name)
+            continue
+        results[location.name] = {stop.label: len(departures) for stop, departures in boards}
 
-    counts = {direction.label: len(departures) for direction, departures in boards}
-    LOG.info("Board updated departures=%s forced=%s", counts, force_refresh)
-    return {"status": "updated", "departures": counts, "forced": force_refresh}
+    LOG.info("Board updated departures=%s forced=%s", results, force_refresh)
+    if failed:
+        raise UpstreamError(f"Refresh failed for: {', '.join(failed)}")
+    return {"status": "updated", "departures": results, "forced": force_refresh}

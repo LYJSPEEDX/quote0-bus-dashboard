@@ -10,4 +10,4 @@ __pycache__/
 .DS_Store
 .venv/
 .env
-board.png
+board-*.png
