@@ -1,0 +1,10 @@
+# Copy this file to secrets.auto.tfvars. Do not commit the copied file.
+tfnsw_api_key   = "replace-with-tfnsw-api-key"
+quote0_api_key  = "replace-with-dot-app-api-key"
+quote0_device_id = "replace-with-device-serial"
+
+# Optional: only needed when the device has multiple Image API tasks.
+quote0_task_key = ""
+
+# Optional: e.g. "Rhodes". Leave empty to display all 526 departures.
+destination_filter = ""
