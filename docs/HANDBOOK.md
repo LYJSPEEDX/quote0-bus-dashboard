@@ -164,6 +164,8 @@ done
 
 ## 4. Terraform 基础（够用版）
 
+> 更完整的原理（S3 state、凭据、初始化、换电脑、增量更新）见 [`TERRAFORM.md`](TERRAFORM.md)。
+
 Terraform 把“AWS 里应该有什么”写成代码（`terraform/*.tf`），然后负责把现实变成代码描述的样子。
 
 | 文件 | 内容 |
@@ -248,9 +250,9 @@ aws sts get-caller-identity
 
 ### 5.2 安装工具
 
-- Terraform ≥ 1.6：<https://developer.hashicorp.com/terraform/install>（macOS：`brew install terraform`）
+- Terraform ≥ 1.10：<https://developer.hashicorp.com/terraform/install>（macOS：`brew install terraform`）
 - AWS CLI v2：<https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html>
-- `zip`、Python 3 + pip
+- Python 3 + pip
 
 ### 5.3 创建 state 桶（每个 AWS 账户只做一次）
 
@@ -300,6 +302,9 @@ EOF
 脚本用 `pip --platform manylinux2014_x86_64 --python-version 3.11 --only-binary=:all:`
 下载 **Linux 版** Pillow，所以在 macOS / Windows 上打出来的包也能在 Lambda 上运行，
 不需要 Docker。产物是 `build/lambda.zip`（约 9 MB），包含 `app.py`、`fonts/`、`PIL/`。
+
+打包是**可复现**的：固定文件顺序、时间戳和权限，并且不生成 `.pyc`。同样的代码在任何电脑上
+打出来的哈希都一样，所以只有代码或依赖真正变化时，Terraform 才会更新 Lambda。
 
 ### 5.6 Plan 和 Apply
 

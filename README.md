@@ -9,11 +9,13 @@ Australia Ave before Herb Elliott Ave (`212727`) on the bottom row.
 
 A step-by-step operations handbook (in Chinese) covering local debugging,
 Terraform, AWS deployment, day-to-day changes and troubleshooting is in
-[`docs/HANDBOOK.md`](docs/HANDBOOK.md).
+[`docs/HANDBOOK.md`](docs/HANDBOOK.md); how Terraform is set up here (S3 state,
+credentials, init, incremental updates) is explained in
+[`docs/TERRAFORM.md`](docs/TERRAFORM.md).
 
 ## Prerequisites
 
-- Terraform 1.6+, Python 3 with pip, `zip`, and AWS CLI credentials with permission to
+- Terraform 1.10+, Python 3 with pip, and AWS CLI credentials with permission to
   create the Lambda, IAM roles/policies, EventBridge Scheduler schedule, and
   CloudWatch log group defined in `terraform/`.
 - A TfNSW Open Data API token.
