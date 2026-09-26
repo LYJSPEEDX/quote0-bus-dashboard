@@ -463,7 +463,12 @@ def push_image(
     try:
         with opener(request, timeout=12) as response:
             body = json.loads(response.read().decode("utf-8"))
-    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
+    except HTTPError as exc:
+        hint = ""
+        if exc.code == 404:
+            hint = f" (no Image API task{f' with task_key {task_key!r}' if task_key else ''} in the device loop; add one in Dot App)"
+        raise UpstreamError(f"Quote/0 image request failed: {exc}{hint}") from exc
+    except (URLError, TimeoutError, json.JSONDecodeError) as exc:
         raise UpstreamError(f"Quote/0 image request failed: {exc}") from exc
     if int(body.get("code", 200)) >= 400:
         raise UpstreamError(f"Quote/0 image request rejected: code={body.get('code')}")
