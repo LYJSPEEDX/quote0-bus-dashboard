@@ -20,6 +20,7 @@ locals {
     NORMAL_REFRESH_MINUTES = tostring(var.normal_refresh_minutes)
     PEAK_WINDOWS           = var.peak_windows
     PEAK_REFRESH_MINUTES   = tostring(var.peak_refresh_minutes)
+    REFRESH_MODE           = var.refresh_mode
   }
 }
 

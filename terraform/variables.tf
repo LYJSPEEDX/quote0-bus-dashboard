@@ -85,6 +85,16 @@ variable "active_end" {
   default = "17:00"
 }
 
+variable "refresh_mode" {
+  type        = string
+  description = "follow_device: push in the two minutes before Quote/0 next wakes (from its status API), falling back to the fixed cadence when unknown. fixed: push on normal/peak refresh minutes only."
+  default     = "follow_device"
+  validation {
+    condition     = contains(["follow_device", "fixed"], var.refresh_mode)
+    error_message = "refresh_mode must be follow_device or fixed."
+  }
+}
+
 variable "normal_refresh_minutes" {
   type    = number
   default = 30

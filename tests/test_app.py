@@ -52,6 +52,59 @@ class AppTests(unittest.TestCase):
         self.assertTrue(app.should_refresh(at(16, 2), peak))
         self.assertFalse(app.should_refresh(at(15, 2), peak))
 
+    def status_opener(self, next_render, captured=None):
+        def opener(request, timeout):
+            if captured is not None:
+                captured.append(request)
+            return FakeResponse({"status": {"current": "Snapping"}, "renderInfo": {"next": next_render}})
+
+        return opener
+
+    def test_next_wake_is_the_earliest_future_prediction(self):
+        now = datetime(2026, 9, 26, 12, 29, tzinfo=self.settings.tz)
+        # On battery the power prediction is stale; on power it is the earlier one.
+        on_battery = {"battery": "09/26/2026 12:57", "power": "09/26/2026 11:07"}
+        on_power = {"battery": "09/26/2026 12:57", "power": "09/26/2026 12:32"}
+        captured = []
+        wake = app.fetch_next_wake(self.settings, now, self.status_opener(on_battery, captured))
+        self.assertEqual(wake, datetime(2026, 9, 26, 12, 57, tzinfo=self.settings.tz))
+        self.assertIn("/DEVICE123/status", captured[0].full_url)
+        self.assertEqual(captured[0].get_header("Authorization"), "Bearer quote-secret")
+        wake = app.fetch_next_wake(self.settings, now, self.status_opener(on_power))
+        self.assertEqual(wake, datetime(2026, 9, 26, 12, 32, tzinfo=self.settings.tz))
+        stale = {"battery": "09/26/2026 11:00", "power": "garbage"}
+        self.assertIsNone(app.fetch_next_wake(self.settings, now, self.status_opener(stale)))
+
+    def test_follow_device_pushes_on_the_tick_before_each_wake(self):
+        at = lambda minute, second=3: datetime(2026, 9, 26, 12, minute, second, tzinfo=self.settings.tz)
+        opener = self.status_opener({"battery": "09/26/2026 12:57"})
+        self.assertFalse(app.refresh_due(at(54), self.settings, opener)[0])
+        self.assertTrue(app.refresh_due(at(56), self.settings, opener)[0])
+        opener = self.status_opener({"battery": "09/26/2026 12:58"})
+        self.assertTrue(app.refresh_due(at(56), self.settings, opener)[0])
+        self.assertFalse(app.refresh_due(at(58), self.settings, opener)[0])
+
+    def test_follow_device_falls_back_to_fixed_cadence(self):
+        def offline(_request, timeout):
+            raise URLError("offline")
+
+        half_hour = datetime(2026, 9, 26, 12, 30, tzinfo=self.settings.tz)
+        self.assertEqual(app.refresh_due(half_hour, self.settings, offline), (True, "fixed cadence"))
+        stale = self.status_opener({"battery": "09/26/2026 11:00"})
+        self.assertEqual(app.refresh_due(half_hour, self.settings, stale), (True, "fixed cadence"))
+
+    def test_no_status_call_outside_active_window_or_in_fixed_mode(self):
+        def must_not_call(_request, timeout):
+            raise AssertionError("status API called")
+
+        evening = datetime(2026, 9, 26, 18, 0, tzinfo=self.settings.tz)
+        self.assertEqual(app.refresh_due(evening, self.settings, must_not_call), (False, "outside active window"))
+        fixed = app.Settings.from_environment({**ENV, "REFRESH_MODE": "fixed"})
+        half_hour = datetime(2026, 9, 26, 12, 30, tzinfo=self.settings.tz)
+        self.assertEqual(app.refresh_due(half_hour, fixed, must_not_call), (True, "fixed cadence"))
+        with self.assertRaises(app.ConfigurationError):
+            app.Settings.from_environment({**ENV, "REFRESH_MODE": "sometimes"})
+
     def test_fetch_prefers_estimate_filters_and_sorts(self):
         captured = {}
 

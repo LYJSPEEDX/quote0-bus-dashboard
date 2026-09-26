@@ -10,22 +10,33 @@
 ```
 EventBridge Scheduler ──每 2 分钟触发──▶ Lambda (quote0-busboard)
   (悉尼时间 10:00–18:58)                   │
-                                           ├─ 1. 判断现在是否到了刷新点（默认 10:00–17:00，每 30 分钟）
-                                           ├─ 2. 调 TfNSW departure_mon，拿每个站台的实时班次
-                                           ├─ 3. 用 Pillow 画 296×152 的 1-bit PNG
-                                           └─ 4. POST 到 Quote/0 Image API
+                                           ├─ 1. 不在 10:00–17:00 → 直接返回 skipped
+                                           ├─ 2. 查 Quote/0 状态接口：设备下次几点醒？
+                                           │     不在接下来 2 分钟内 → 返回 skipped
+                                           ├─ 3. 调 TfNSW departure_mon，拿每个站台的实时班次
+                                           ├─ 4. 用 Pillow 画 296×152 的 1-bit PNG
+                                           └─ 5. POST 到 Quote/0 Image API
                                                         │
-                                          Quote/0 设备下次唤醒时显示（设备自己的刷新间隔）
+                                          1–2 分钟后设备醒来，取走这张新图显示
 ```
 
 - **没有服务器、数据库、API Gateway、S3。** 只有一个 Lambda 和一个定时器，成本基本为 0。
-- **为什么定时器每 2 分钟触发，而不是直接每 30 分钟？** 刷新节奏（包括可选的高峰加密
-  `peak_windows`）由 Lambda 内的 `should_refresh()` 决定，改节奏只需要改环境变量、不用
-  改定时器。未到刷新点的调用会立即返回 `{"status": "skipped"}`，不访问任何外部接口。
-  每天约 270 次空调用，在 Lambda 免费额度内。
-- **显示延迟：** Quote/0 是电池设备，平时休眠，只在自己的唤醒间隔到了才联网取图。
-  所以屏幕上显示的是“推送那一刻”的数据，标题栏的 `Updated HH:MM` 就是那个时刻；
-  右侧和大数字旁的到站**钟点**无论多晚显示都是准的。
+- **显示延迟是核心问题：** Quote/0 平时休眠，只在自己的唤醒间隔到了才联网，从 Dot 云端
+  取最新的图。设备不会来找我们，我们也叫不醒它。如果按固定时间推送（比如整点、半点），
+  而设备在 :27、:57 醒来，屏幕上的数据就旧了将近 30 分钟。
+- **解决办法：跟随设备唤醒（`refresh_mode = "follow_device"`，默认）。** Quote/0 的状态接口
+  `GET /device/:id/status` 会给出 `renderInfo.next`，也就是预测的下次唤醒时间（分别给出电池
+  和插电两种情况，取其中最早的未来时间就是真正的下次唤醒）。Lambda 每 2 分钟看一眼，
+  只在“设备 2 分钟内就会醒”的那一次才取数据、推送。于是设备每次醒来拿到的都是 1–2 分钟前的数据，
+  推送次数又和设备唤醒次数一样少。
+- **兜底：** 状态接口失败、或者没有未来的唤醒时间（设备离线），自动退回固定节奏
+  （`normal_refresh_minutes`，默认每 30 分钟，整点和半点）。`refresh_mode = "fixed"` 可以
+  完全关闭跟随逻辑。
+- **为什么定时器是每 2 分钟：** 这是跟随精度。每个“唤醒前 2 分钟”窗口里恰好有一次触发。
+  不需要推送的触发几毫秒就返回 `{"status": "skipped", "reason": ...}`。
+- **调用量（10:00–17:00）：** 状态接口约 210 次/天；推送次数 = 设备唤醒次数
+  （电池 30 分钟间隔约 14 次/天，插电 5 分钟间隔约 84 次/天），每次推送调 TfNSW 2 次。
+- 标题栏的 `Updated HH:MM` 是数据生成时刻；到站**钟点**无论多晚显示都是准的。
 
 ### 代码结构
 
@@ -337,7 +348,11 @@ aws lambda invoke \
 {"status": "updated", "departures": {"Olympic Park": {"Strathfield": 3, "Rhodes": 3}}, "forced": true}
 ```
 
-不带 `force_refresh` 时，不在刷新点会返回 `{"status": "skipped"}`，这是正常的。
+不带 `force_refresh` 时，大多数调用会返回 `{"status": "skipped", "reason": "device wakes at 12:57"}`
+之类，说明它查过设备、还没到唤醒前 2 分钟，这是正常的。
+
+确认跟随逻辑在工作：看日志里 `Refresh due: device wakes at HH:MM` 的时间，
+应该总是比 HH:MM 早 1–2 分钟；再对照设备状态接口里的 `renderInfo.last`。
 
 看日志：
 
@@ -400,15 +415,17 @@ locations = [
 ```hcl
 active_start           = "10:00"
 active_end             = "17:00"   # 不含
-normal_refresh_minutes = 30        # 必须是 2 的倍数
+refresh_mode           = "follow_device"  # 或 "fixed"
+normal_refresh_minutes = 30        # fixed 模式或兜底时的节奏，必须是 2 的倍数
 peak_windows           = ""        # 例如 "16:30-18:30"，空字符串表示不启用
 peak_refresh_minutes   = 2
 ```
 
 如果 `active_end` 要晚于 19:00，还要改 `main.tf` 里定时器的小时范围 `10-18`。
 
-**记得同步调整设备唤醒间隔**（Dot App 或 settings 接口），不然推送再频繁，设备也只按自己的
-节奏显示。
+在 `follow_device` 模式下，**屏幕多久更新一次由设备自己的唤醒间隔决定**（Dot App 里设置，
+或 `POST /device/:id/settings` 的 `interval.batteryMs / powerMs`），Lambda 会自动跟上，
+不需要改 Terraform。
 
 ### 7.4 轮换 API key
 
@@ -421,7 +438,9 @@ environment 会显示 `(sensitive value)` 变更，这是正常的。
 
 | 现象 | 可能原因 | 处理 |
 |---|---|---|
-| Lambda 返回 `skipped` | 不在刷新时段或不在刷新点 | 正常。要立即刷新用 `force_refresh` |
+| Lambda 返回 `skipped` | 不在刷新时段，或设备还没到唤醒前 2 分钟（看 `reason`） | 正常。要立即刷新用 `force_refresh` |
+| 日志 `Device status unavailable; using fixed cadence` | Quote/0 状态接口失败 | 偶发可忽略；持续出现检查 `QUOTE0_API_KEY`、设备序列号 |
+| 日志 `No upcoming device wake reported` | 设备离线（没电、断网），预测时间都已过去 | 给设备充电 / 联网；期间按固定节奏推送 |
 | 日志 `TfNSW departure request failed: HTTP Error 401` | TfNSW token 错或失效 | 重新生成 token，更新变量后 apply |
 | 某方向一直 `No buses` | 站台编号错，或线路号不经过该站 | 用 3.4 节的 `departure_mon` 命令核对 |
 | `Quote/0 image request failed: HTTP Error 404 (no Image API task ...)` | 设备轮播里没有 Image API 内容，或 `task_key` 不匹配 | Dot App 添加 Image API 内容；用 `loop/list` 核对 key |
@@ -472,9 +491,10 @@ aws s3api delete-bucket --bucket $B
 | 区域 | `ap-southeast-2`（悉尼） |
 | Lambda | `quote0-busboard`，Python 3.11，x86_64 |
 | 定时器 | `quote0-busboard-refresh`，`cron(0/2 10-18 ? * * *)`，`Australia/Sydney` |
-| 刷新节奏 | 10:00–17:00，每 30 分钟（10:00、10:30 … 16:30） |
+| 刷新策略 | `follow_device`：10:00–17:00 内，设备每次唤醒前 1–2 分钟推送；查不到唤醒时间时每 30 分钟 |
 | 日志组 | `/aws/lambda/quote0-busboard`，保留 30 天 |
 | State | `s3://quote0-busboard-tfstate-<账户ID>/quote0-busboard/terraform.tfstate` |
 | 地点 | Olympic Park，526：`212726` → Strathfield，`212727` → Rhodes |
 | 设备 | Quote/0，电池唤醒间隔 30 分钟，夜间休眠 22:00–08:00，轮播里只有 1 个 Image API 内容 |
 | 部署验证 | `force_refresh` 返回 `updated`，两方向各 3 班；普通调用返回 `skipped` |
+| 2026-09-26 更新 | 切换为 `follow_device`：只原地更新 Lambda（代码 + `REFRESH_MODE`） |

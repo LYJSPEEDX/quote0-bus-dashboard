@@ -54,7 +54,11 @@ Defaults are in `terraform/variables.tf`: the Olympic Park 526 location, 10:00 t
 every two minutes.
 
 Quote/0 only displays a push when it next wakes (its own refresh interval, set in
-Dot App), so an image can appear well after it was rendered. Each row shows the
+Dot App). With the default `refresh_mode = "follow_device"`, each scheduler tick
+reads the device's predicted next wake from its status API and pushes only in
+the two minutes before it, so the screen shows data at most about two minutes
+old; if the next wake is unknown it falls back to the fixed cadence above
+(`refresh_mode = "fixed"` uses that cadence only). Each row shows the
 next bus as a large countdown (counted from the "Updated HH:MM" header time)
 with its clock time, and the two following buses as clock times, which stay
 correct however late the image appears.

@@ -25,6 +25,11 @@ LOG.setLevel(logging.INFO)
 
 TFNSW_DEPARTURES_URL = "https://api.transport.nsw.gov.au/v1/tp/departure_mon"
 QUOTE0_IMAGE_URL = "https://dot.mindreset.tech/api/authV2/open/device/{device_id}/image"
+QUOTE0_STATUS_URL = "https://dot.mindreset.tech/api/authV2/open/device/{device_id}/status"
+REFRESH_MODES = ("follow_device", "fixed")
+# EventBridge Scheduler ticks every two minutes, so exactly one tick falls in
+# the two minutes before each device wake.
+FOLLOW_LEAD_SECONDS = 120
 SCREEN_SIZE = (296, 152)
 FONT_DIR = Path(__file__).resolve().parent / "fonts"
 
@@ -86,6 +91,7 @@ class Settings:
     normal_refresh_minutes: int
     peak_windows: tuple[tuple[time, time], ...]
     peak_refresh_minutes: int
+    refresh_mode: str = "follow_device"
 
     @property
     def tz(self) -> ZoneInfo:
@@ -130,12 +136,20 @@ class Settings:
             normal_refresh_minutes=normal,
             peak_windows=_parse_windows(env.get("PEAK_WINDOWS", "")),
             peak_refresh_minutes=peak,
+            refresh_mode=_refresh_mode(env.get("REFRESH_MODE", "follow_device")),
         )
 
 
 def _optional(value: str | None) -> str | None:
     value = (value or "").strip()
     return value or None
+
+
+def _refresh_mode(value: str) -> str:
+    value = value.strip() or "follow_device"
+    if value not in REFRESH_MODES:
+        raise ConfigurationError(f"REFRESH_MODE must be one of: {', '.join(REFRESH_MODES)}")
+    return value
 
 
 def _positive_int(value: str, name: str) -> int:
@@ -208,12 +222,17 @@ def _parse_windows(value: str) -> tuple[tuple[time, time], ...]:
     return tuple(windows)
 
 
+def in_active_window(now: datetime, settings: Settings) -> bool:
+    current_time = now.astimezone(settings.tz).timetz().replace(tzinfo=None)
+    return settings.active_start <= current_time < settings.active_end
+
+
 def should_refresh(now: datetime, settings: Settings) -> bool:
     """Return whether this scheduler tick is due to fetch and render data."""
+    if not in_active_window(now, settings):
+        return False
     local_now = now.astimezone(settings.tz)
     current_time = local_now.timetz().replace(tzinfo=None)
-    if not settings.active_start <= current_time < settings.active_end:
-        return False
 
     minutes_since_midnight = local_now.hour * 60 + local_now.minute
     for start, end in settings.peak_windows:
@@ -223,6 +242,59 @@ def should_refresh(now: datetime, settings: Settings) -> bool:
 
     active_start_minutes = settings.active_start.hour * 60 + settings.active_start.minute
     return (minutes_since_midnight - active_start_minutes) % settings.normal_refresh_minutes == 0
+
+
+def fetch_next_wake(settings: Settings, now: datetime, opener: Callable[..., Any] = urlopen) -> datetime | None:
+    """Return when Quote/0 will next wake and fetch content, from its status API.
+
+    The status reports a predicted next render for battery and for power
+    (e.g. "09/26/2026 12:57", in the device's local time). The one for the
+    current power source is in the future; the other is stale or later, so the
+    earliest future time is the real next wake.
+    """
+    request = Request(
+        QUOTE0_STATUS_URL.format(device_id=settings.quote0_device_id),
+        headers={"Authorization": f"Bearer {settings.quote0_api_key}"},
+        method="GET",
+    )
+    try:
+        with opener(request, timeout=12) as response:
+            body = json.loads(response.read().decode("utf-8"))
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
+        raise UpstreamError(f"Quote/0 status request failed: {exc}") from exc
+
+    upcoming = []
+    for raw in ((body.get("renderInfo") or {}).get("next") or {}).values():
+        try:
+            wake = datetime.strptime(str(raw), "%m/%d/%Y %H:%M").replace(tzinfo=settings.tz)
+        except ValueError:
+            LOG.warning("Skipping malformed Quote/0 next-render time")
+            continue
+        if wake > now:
+            upcoming.append(wake)
+    return min(upcoming, default=None)
+
+
+def refresh_due(now: datetime, settings: Settings, opener: Callable[..., Any] = urlopen) -> tuple[bool, str]:
+    """Decide whether this scheduler tick should fetch, render and push.
+
+    In follow_device mode the push lands just before the device next wakes, so
+    the screen shows data at most a couple of minutes old. If the device's next
+    wake is unknown (status error, device offline), fall back to the fixed cadence.
+    """
+    if not in_active_window(now, settings):
+        return False, "outside active window"
+    if settings.refresh_mode == "follow_device":
+        try:
+            wake = fetch_next_wake(settings, now, opener)
+        except UpstreamError:
+            LOG.warning("Device status unavailable; using fixed cadence", exc_info=True)
+            wake = None
+        if wake is not None:
+            lead = (wake - now).total_seconds()
+            return 0 < lead <= FOLLOW_LEAD_SECONDS, f"device wakes at {wake:%H:%M}"
+        LOG.warning("No upcoming device wake reported; using fixed cadence")
+    return should_refresh(now, settings), "fixed cadence"
 
 
 def fetch_departures(
@@ -484,9 +556,12 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     settings = Settings.from_environment()
     now = datetime.now(timezone.utc)
     force_refresh = bool((event or {}).get("force_refresh"))
-    if not force_refresh and not should_refresh(now, settings):
-        LOG.info("Refresh skipped outside configured cadence")
-        return {"status": "skipped"}
+    if not force_refresh:
+        due, reason = refresh_due(now, settings)
+        if not due:
+            LOG.info("Refresh skipped: %s", reason)
+            return {"status": "skipped", "reason": reason}
+        LOG.info("Refresh due: %s", reason)
 
     results: dict[str, dict[str, int]] = {}
     failed: list[str] = []
