@@ -41,6 +41,8 @@ class AppTests(unittest.TestCase):
 
     def test_refresh_schedule_boundaries(self):
         at = lambda hour, minute: datetime(2026, 9, 16, hour, minute, tzinfo=self.settings.tz)
+        self.assertFalse(app.should_refresh(at(8, 58), self.settings))
+        self.assertTrue(app.should_refresh(at(9, 0), self.settings))
         self.assertTrue(app.should_refresh(at(10, 0), self.settings))
         self.assertFalse(app.should_refresh(at(10, 2), self.settings))
         self.assertTrue(app.should_refresh(at(10, 30), self.settings))

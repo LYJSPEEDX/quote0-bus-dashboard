@@ -4,6 +4,12 @@ provider "aws" {
 
 locals {
   function_name = var.project_name
+
+  # Scheduler hours covering [active_start, active_end): an end on the hour
+  # (17:00) needs ticks only up to 16:58.
+  schedule_first_hour = tonumber(split(":", var.active_start)[0])
+  active_end_hour     = tonumber(split(":", var.active_end)[0])
+  schedule_last_hour  = tonumber(split(":", var.active_end)[1]) == 0 ? local.active_end_hour - 1 : local.active_end_hour
   common_tags = {
     Project   = var.project_name
     ManagedBy = "Terraform"
@@ -104,12 +110,12 @@ resource "aws_iam_role_policy" "scheduler_invoke" {
   })
 }
 
-# The event fires every two minutes in the configured daytime envelope. The
-# Lambda gates normal and peak refreshes, so no TfNSW or Quote/0 calls occur on
-# non-due invocations. Scheduler's time zone handles Sydney daylight saving.
+# The event fires every two minutes during the hours of the active window. The
+# Lambda decides whether each tick is due, so non-due invocations make no
+# TfNSW or Quote/0 calls. Scheduler's time zone handles Sydney daylight saving.
 resource "aws_scheduler_schedule" "refresh" {
   name                         = "${local.function_name}-refresh"
-  schedule_expression          = "cron(0/2 10-18 ? * * *)"
+  schedule_expression          = "cron(0/2 ${local.schedule_first_hour}-${local.schedule_last_hour} ? * * *)"
   schedule_expression_timezone = var.timezone
   state                        = "ENABLED"
 

@@ -76,13 +76,31 @@ variable "timezone" {
 }
 
 variable "active_start" {
-  type    = string
-  default = "10:00"
+  type        = string
+  description = "Start of the daily refresh window (HH:MM, local time). Match the device's wake-up time."
+  default     = "09:00"
+  validation {
+    condition     = can(regex("^([01][0-9]|2[0-3]):[0-5][0-9]$", var.active_start))
+    error_message = "active_start must be HH:MM."
+  }
 }
 
 variable "active_end" {
-  type    = string
-  default = "17:00"
+  type        = string
+  description = "End of the daily refresh window (HH:MM, local time, exclusive)."
+  default     = "17:00"
+  validation {
+    condition     = can(regex("^([01][0-9]|2[0-3]):[0-5][0-9]$", var.active_end))
+    error_message = "active_end must be HH:MM."
+  }
+  validation {
+    condition = try(
+      tonumber(split(":", var.active_end)[0]) * 60 + tonumber(split(":", var.active_end)[1]) >
+      tonumber(split(":", var.active_start)[0]) * 60 + tonumber(split(":", var.active_start)[1]),
+      false
+    )
+    error_message = "active_end must be later than active_start."
+  }
 }
 
 variable "refresh_mode" {

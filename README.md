@@ -49,7 +49,7 @@ both API keys, so never make the bucket public or copy the state elsewhere.
 
 ## Configuration
 
-Defaults are in `terraform/variables.tf`: the Olympic Park 526 location, 10:00 to
+Defaults are in `terraform/variables.tf`: the Olympic Park 526 location, 09:00 to
 17:00 Sydney time, refreshing every 30 minutes. `peak_windows` (e.g.
 `"16:30-18:30"`) optionally adds faster refreshes. `NORMAL_REFRESH_MINUTES` and
 `PEAK_REFRESH_MINUTES` must be multiples of two because the scheduler ticks
@@ -121,7 +121,7 @@ aws scheduler get-schedule --name quote0-busboard-refresh --region ap-southeast-
 
 Once Terraform has applied successfully, use a manual Lambda invocation to
 fetch current TfNSW data and push a screen update immediately. This is the only
-path that bypasses the configured 10:00–17:00 refresh gate:
+path that bypasses the configured 09:00–17:00 refresh gate:
 
 ```sh
 aws lambda invoke \

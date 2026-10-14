@@ -9,8 +9,8 @@
 
 ```
 EventBridge Scheduler ──每 2 分钟触发──▶ Lambda (quote0-busboard)
-  (悉尼时间 10:00–18:58)                   │
-                                           ├─ 1. 不在 10:00–17:00 → 直接返回 skipped
+  (悉尼时间 09:00–16:58)                   │
+                                           ├─ 1. 不在 09:00–17:00 → 直接返回 skipped
                                            ├─ 2. 查 Quote/0 状态接口：设备下次几点醒？
                                            │     不在接下来 2 分钟内 → 返回 skipped
                                            ├─ 3. 调 TfNSW departure_mon，拿每个站台的实时班次
@@ -34,7 +34,7 @@ EventBridge Scheduler ──每 2 分钟触发──▶ Lambda (quote0-busboard)
   完全关闭跟随逻辑。
 - **为什么定时器是每 2 分钟：** 这是跟随精度。每个“唤醒前 2 分钟”窗口里恰好有一次触发。
   不需要推送的触发几毫秒就返回 `{"status": "skipped", "reason": ...}`。
-- **调用量（10:00–17:00）：** 状态接口约 210 次/天；推送次数 = 设备唤醒次数
+- **调用量（09:00–17:00）：** 状态接口约 210 次/天；推送次数 = 设备唤醒次数
   （电池 30 分钟间隔约 14 次/天，插电 5 分钟间隔约 84 次/天），每次推送调 TfNSW 2 次。
 - 标题栏的 `Updated HH:MM` 是数据生成时刻；到站**钟点**无论多晚显示都是准的。
 
@@ -326,7 +326,7 @@ terraform apply tfplan
 | `aws_lambda_function.board` | `quote0-busboard` | 代码本体，Python 3.11，256 MB，超时 30 秒 |
 | `aws_iam_role.scheduler` | `quote0-busboard-scheduler-role` | 定时器的身份 |
 | `aws_iam_role_policy.scheduler_invoke` | `quote0-busboard-invoke` | 只允许调用这一个 Lambda |
-| `aws_scheduler_schedule.refresh` | `quote0-busboard-refresh` | `cron(0/2 10-18 ? * * *)`，悉尼时区，自动处理夏令时 |
+| `aws_scheduler_schedule.refresh` | `quote0-busboard-refresh` | 每 2 分钟，小时范围由 `active_start`/`active_end` 自动算出（默认 `cron(0/2 9-16 ? * * *)`），悉尼时区，自动处理夏令时 |
 | `aws_lambda_permission.scheduler` | — | Lambda 侧只接受这一个定时器的调用 |
 
 权限按最小化设计：Lambda 除了写自己的日志，不能访问任何 AWS 资源；外部调用只有
@@ -418,7 +418,7 @@ locations = [
 同样在 `secrets.auto.tfvars` 里改：
 
 ```hcl
-active_start           = "10:00"
+active_start           = "09:00"   # 和设备醒来的时间对齐
 active_end             = "17:00"   # 不含
 refresh_mode           = "follow_device"  # 或 "fixed"
 normal_refresh_minutes = 30        # fixed 模式或兜底时的节奏，必须是 2 的倍数
@@ -426,7 +426,8 @@ peak_windows           = ""        # 例如 "16:30-18:30"，空字符串表示�
 peak_refresh_minutes   = 2
 ```
 
-如果 `active_end` 要晚于 19:00，还要改 `main.tf` 里定时器的小时范围 `10-18`。
+定时器的小时范围会根据 `active_start` / `active_end` 自动计算，不需要手动改 `main.tf`。
+**让工作时段和设备的休眠时段对齐**：设备醒着而 Lambda 不工作的时间里，屏幕会一直显示上一次的旧图。
 
 在 `follow_device` 模式下，**屏幕多久更新一次由设备自己的唤醒间隔决定**（Dot App 里设置，
 或 `POST /device/:id/settings` 的 `interval.batteryMs / powerMs`），Lambda 会自动跟上，
@@ -495,11 +496,12 @@ aws s3api delete-bucket --bucket $B
 | 首次部署 | 2026-09-26 |
 | 区域 | `ap-southeast-2`（悉尼） |
 | Lambda | `quote0-busboard`，Python 3.11，x86_64 |
-| 定时器 | `quote0-busboard-refresh`，`cron(0/2 10-18 ? * * *)`，`Australia/Sydney` |
-| 刷新策略 | `follow_device`：10:00–17:00 内，设备每次唤醒前 1–2 分钟推送；查不到唤醒时间时每 30 分钟 |
+| 定时器 | `quote0-busboard-refresh`，`cron(0/2 9-16 ? * * *)`，`Australia/Sydney` |
+| 刷新策略 | `follow_device`：09:00–17:00 内，设备每次唤醒前 1–2 分钟推送；查不到唤醒时间时每 30 分钟 |
 | 日志组 | `/aws/lambda/quote0-busboard`，保留 30 天 |
 | State | `s3://quote0-busboard-tfstate-<账户ID>/quote0-busboard/terraform.tfstate` |
 | 地点 | Olympic Park，526：`212726` → Strathfield，`212727` → Rhodes |
-| 设备 | Quote/0，电池唤醒间隔 30 分钟，夜间休眠 22:00–08:00，轮播里只有 1 个 Image API 内容 |
+| 设备 | Quote/0，电池唤醒间隔 5 分钟，休眠 17:00–09:00，轮播里只有 1 个 Image API 内容 |
 | 部署验证 | `force_refresh` 返回 `updated`，两方向各 3 班；普通调用返回 `skipped` |
 | 2026-09-26 更新 | 切换为 `follow_device`：只原地更新 Lambda（代码 + `REFRESH_MODE`） |
+| 2026-10-14 更新 | 时段改为 09:00–17:00（与设备 17:00–09:00 休眠对齐）；定时器小时范围改为自动计算；可复现打包上线 |

@@ -131,7 +131,7 @@ class Settings:
             locations=_parse_locations(env.get("LOCATIONS") or DEFAULT_LOCATIONS),
             max_departures=max_departures,
             timezone_name=timezone_name,
-            active_start=_parse_time(env.get("ACTIVE_START", "10:00"), "ACTIVE_START"),
+            active_start=_parse_time(env.get("ACTIVE_START", "09:00"), "ACTIVE_START"),
             active_end=_parse_time(env.get("ACTIVE_END", "17:00"), "ACTIVE_END"),
             normal_refresh_minutes=normal,
             peak_windows=_parse_windows(env.get("PEAK_WINDOWS", "")),
